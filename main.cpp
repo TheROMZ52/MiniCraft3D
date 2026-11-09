@@ -1443,20 +1443,20 @@ int main() {
         double now = glfwGetTime();
         float dt = static_cast<float>(std::min(now - lastFrame, 0.05));
         lastFrame = now;
-        worldTime += dt;
+        if (uiScreen == UiScreen::Gameplay) worldTime += dt;
 
         processInput(window, dt);
         processUiMouse(window);
         processInventoryMouse(window);
         processBlocks(window, dt);
-        playerStats.tick(dt, playerMoving, playerSprinting);
+        if (uiScreen == UiScreen::Gameplay) playerStats.tick(dt, playerMoving, playerSprinting);
         if (!playerStats.alive()) {
             player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
             velocity = glm::vec3(0.0f);
             playerStats.set(mc::PlayerStats::MaxHealth, 12.0f);
             lastCraftMessage = "Respawned";
         }
-        updateDrops(dt);
+        if (uiScreen == UiScreen::Gameplay) updateDrops(dt);
 
         float daylight = 0.5f + 0.5f * std::sin(worldTime * 0.04f);
         glm::vec3 nightSky(0.025f,0.035f,0.09f);
