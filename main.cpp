@@ -157,7 +157,7 @@ const float faceCorners[6][4][3] = {
     {{-0.5f,0.5f,0.5f},{0.5f,0.5f,0.5f},{0.5f,0.5f,-0.5f},{-0.5f,0.5f,-0.5f}},
     {{-0.5f,-0.5f,-0.5f},{0.5f,-0.5f,-0.5f},{0.5f,-0.5f,0.5f},{-0.5f,-0.5f,0.5f}},
     {{0.5f,-0.5f,0.5f},{0.5f,-0.5f,-0.5f},{0.5f,0.5f,-0.5f},{0.5f,0.5f,0.5f}},
-    {{-0.5f,-0.5f,-0.5f},{-0.5f,0.5f,-0.5f},{-0.5f,0.5f,0.5f},{-0.5f,-0.5f,0.5f}}
+    {{-0.5f,-0.5f,-0.5f},{-0.5f,-0.5f,0.5f},{-0.5f,0.5f,0.5f},{-0.5f,0.5f,-0.5f}}
 };
 
 const glm::ivec3 faceNormals[6] = {
@@ -182,6 +182,7 @@ glm::vec3 baseColor(int tile) {
         case 5: return {0.78f,0.69f,0.43f};
         case 6: return {0.88f,0.91f,0.96f};
         case 7: return {0.72f,0.48f,0.16f};
+        case 8: return {0.39f,0.25f,0.12f};
         default: return {0.28f,0.68f,0.17f};
     }
 }
@@ -332,6 +333,10 @@ void generateWorld() {
     velocity = glm::vec3(0.0f);
 }
 
+bool meshSolidAt(int x, int y, int z) {
+    return insideWorld(x, y, z) && world[x][y][z] != 0;
+}
+
 bool solidAt(int x, int y, int z) {
     if (x < 0 || x >= WORLD_X || z < 0 || z >= WORLD_Z || y < 0) return true;
     if (y >= WORLD_Y) return false;
@@ -435,9 +440,9 @@ float vertexAO(int x, int y, int z, int face, int corner) {
     glm::ivec3 side1 = normal + axisU * signU;
     glm::ivec3 side2 = normal + axisV * signV;
     glm::ivec3 diagonal = normal + axisU * signU + axisV * signV;
-    bool a = solidAt(x + side1.x, y + side1.y, z + side1.z);
-    bool b = solidAt(x + side2.x, y + side2.y, z + side2.z);
-    bool c = solidAt(x + diagonal.x, y + diagonal.y, z + diagonal.z);
+    bool a = meshSolidAt(x + side1.x, y + side1.y, z + side1.z);
+    bool b = meshSolidAt(x + side2.x, y + side2.y, z + side2.z);
+    bool c = meshSolidAt(x + diagonal.x, y + diagonal.y, z + diagonal.z);
     int level = (a && b) ? 0 : 3 - (static_cast<int>(a) + static_cast<int>(b) + static_cast<int>(c));
     return 0.48f + 0.173333f * static_cast<float>(level);
 }
@@ -496,7 +501,7 @@ void rebuildChunk(int cx, int cz) {
                     int nx = x + neighbor[face][0];
                     int ny = y + neighbor[face][1];
                     int nz = z + neighbor[face][2];
-                    if (!solidAt(nx, ny, nz))
+                    if (!meshSolidAt(nx, ny, nz))
                         addFace(vertices, x - originX, y, z - originZ, x, z, id, face);
                 }
             }
