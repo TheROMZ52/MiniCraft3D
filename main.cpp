@@ -1182,13 +1182,15 @@ void drawUI() {
                  i + 1 == selectedBlock, static_cast<std::size_t>(i), i + 1);
     }
 
-    const int iconY = hotbarY + hotbarBox + 13;
-    const int iconStart = centerX - 190;
-    for (int i = 0; i < 10; ++i) {
-        float healthPart = std::clamp((playerStats.health() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
-        float hungerPart = std::clamp((playerStats.hunger() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
-        drawSurvivalIcon(iconStart + i * 18, iconY, healthPart, false);
-        drawSurvivalIcon(centerX + 10 + i * 18, iconY, hungerPart, true);
+    if (!inventoryOpen) {
+        const int iconY = hotbarY + hotbarBox + 13;
+        const int iconStart = centerX - 190;
+        for (int i = 0; i < 10; ++i) {
+            float healthPart = std::clamp((playerStats.health() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
+            float hungerPart = std::clamp((playerStats.hunger() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
+            drawSurvivalIcon(iconStart + i * 18, iconY, healthPart, false);
+            drawSurvivalIcon(centerX + 10 + i * 18, iconY, hungerPart, true);
+        }
     }
 
     if (inventoryOpen) {
