@@ -1054,7 +1054,7 @@ void drawUI() {
     const int total = static_cast<int>(HOTBAR_SIZE) * box +
                       (static_cast<int>(HOTBAR_SIZE) - 1) * gap;
     const int start = (screenWidth - total) / 2;
-    auto drawSlot = [&](int x, int y, const mc::ItemStack& stack, bool selected) {
+    auto drawSlot = [&](int x, int y, const mc::ItemStack& stack, bool selected, std::size_t slotIndex) {
         glScissor(x, y, box, box);
         glClearColor(0.035f, 0.045f, 0.06f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -1065,8 +1065,7 @@ void drawUI() {
             glClear(GL_COLOR_BUFFER_BIT);
             int maximum = mc::Items::maxDurability(stack.itemId);
             if (maximum > 0) {
-                float ratio = static_cast<float>(inventory.durability(
-                    static_cast<std::size_t>(selected ? selectedBlock - 1 : 8))) / maximum;
+                float ratio = static_cast<float>(inventory.durability(slotIndex)) / maximum;
                 int barWidth = static_cast<int>((box - 10) * std::clamp(ratio, 0.0f, 1.0f));
                 glScissor(x + 5, y + 3, box - 10, 3);
                 glClearColor(0.12f, 0.08f, 0.06f, 1.0f);
@@ -1092,14 +1091,14 @@ void drawUI() {
                 int index = 8 + row * 8 + column;
                 int x = start + column * (box + gap);
                 int y = 18 + (3 - row) * (box + gap) + 12;
-                drawSlot(x, y, inventory.slot(static_cast<std::size_t>(index)), false);
+                drawSlot(x, y, inventory.slot(static_cast<std::size_t>(index)), false, static_cast<std::size_t>(index));
             }
         }
     }
 
     for (int i = 0; i < HOTBAR_SIZE; ++i) {
         int x = start + i * (box + gap);
-        drawSlot(x, 18, inventory.slot(static_cast<std::size_t>(i)), i + 1 == selectedBlock);
+        drawSlot(x, 18, inventory.slot(static_cast<std::size_t>(i)), i + 1 == selectedBlock, static_cast<std::size_t>(i));
     }
 
     auto drawStatusBar = [&](int x, int y, float value, const glm::vec3& color) {
