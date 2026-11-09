@@ -52,6 +52,13 @@ bool inventoryOpen = false;
 bool inventoryWasDown = false;
 bool craftWasDown = false;
 bool inventoryClickWasDown = false;
+bool uiClickWasDown = false;
+bool pauseWasDown = false;
+enum class UiScreen { Gameplay, Pause, Settings };
+UiScreen uiScreen = UiScreen::Gameplay;
+float mouseSensitivity = 0.105f;
+float fieldOfView = 76.0f;
+bool showDebugInfo = true;
 double mouseX = 0.0;
 double mouseY = 0.0;
 std::string lastCraftMessage;
@@ -383,7 +390,7 @@ glm::vec3 cameraFront() {
 void mouseCallback(GLFWwindow*, double xpos, double ypos) {
     mouseX = xpos;
     mouseY = ypos;
-    if (inventoryOpen) {
+    if (inventoryOpen || uiScreen != UiScreen::Gameplay) {
         lastX = static_cast<float>(xpos);
         lastY = static_cast<float>(ypos);
         firstMouse = true;
@@ -398,11 +405,12 @@ void mouseCallback(GLFWwindow*, double xpos, double ypos) {
     float dy = lastY - static_cast<float>(ypos);
     lastX = static_cast<float>(xpos);
     lastY = static_cast<float>(ypos);
-    yaw += dx * 0.105f;
-    pitch = std::clamp(pitch + dy * 0.105f, -89.0f, 89.0f);
+    yaw += dx * mouseSensitivity;
+    pitch = std::clamp(pitch + dy * mouseSensitivity, -89.0f, 89.0f);
 }
 
 void scrollCallback(GLFWwindow*, double, double yoffset) {
+    if (uiScreen != UiScreen::Gameplay || inventoryOpen) return;
     selectedBlock += yoffset > 0 ? 1 : -1;
     if (selectedBlock < 1) selectedBlock = HOTBAR_SIZE;
     if (selectedBlock > HOTBAR_SIZE) selectedBlock = 1;
@@ -685,8 +693,29 @@ bool loadWorld() {
 }
 
 void processInput(GLFWwindow* window, float dt) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
+    bool escapeDown = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+    if (escapeDown && !pauseWasDown) {
+        if (inventoryOpen) {
+            inventoryOpen = false;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        } else if (uiScreen == UiScreen::Gameplay) {
+            uiScreen = UiScreen::Pause;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else if (uiScreen == UiScreen::Settings) {
+            uiScreen = UiScreen::Pause;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else {
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
+        firstMouse = true;
+    }
+    pauseWasDown = escapeDown;
+    if (uiScreen != UiScreen::Gameplay) {
+        playerMoving = false;
+        playerSprinting = false;
+        return;
+    }
     for (int i = 0; i < HOTBAR_SIZE; ++i)
         if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) selectedBlock = i + 1;
 
@@ -770,6 +799,50 @@ glm::vec3 uiColor(int id);
 void setFrameUniforms(const glm::mat4& view, const glm::mat4& projection,
                       const glm::vec3& camera, const glm::vec3& fog);
 
+void processUiMouse(GLFWwindow* window) {
+    bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    if (uiScreen == UiScreen::Gameplay || !down || uiClickWasDown) {
+        uiClickWasDown = down;
+        return;
+    }
+    const int x = static_cast<int>(mouseX);
+    const int y = screenHeight - static_cast<int>(mouseY);
+    const int centerX = screenWidth / 2;
+    const int centerY = screenHeight / 2;
+    auto inside = [&](int left, int bottom, int width, int height) {
+        return x >= left && x < left + width && y >= bottom && y < bottom + height;
+    };
+    if (uiScreen == UiScreen::Pause) {
+        if (inside(centerX - 116, centerY + 48, 232, 38)) {
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            firstMouse = true;
+        } else if (inside(centerX - 116, centerY + 1, 232, 38)) {
+            saveWorld();
+            lastCraftMessage = "World saved";
+        } else if (inside(centerX - 116, centerY - 46, 232, 38)) {
+            uiScreen = UiScreen::Settings;
+        } else if (inside(centerX - 116, centerY - 93, 232, 38)) {
+            glfwSetWindowShouldClose(window, true);
+        }
+    } else if (uiScreen == UiScreen::Settings) {
+        const int left = centerX - 215;
+        if (inside(left + 274, centerY + 35, 42, 34))
+            fieldOfView = std::clamp(fieldOfView - 2.0f, 60.0f, 100.0f);
+        else if (inside(left + 370, centerY + 35, 42, 34))
+            fieldOfView = std::clamp(fieldOfView + 2.0f, 60.0f, 100.0f);
+        else if (inside(left + 274, centerY - 21, 42, 34))
+            mouseSensitivity = std::clamp(mouseSensitivity - 0.01f, 0.035f, 0.30f);
+        else if (inside(left + 370, centerY - 21, 42, 34))
+            mouseSensitivity = std::clamp(mouseSensitivity + 0.01f, 0.035f, 0.30f);
+        else if (inside(left + 274, centerY - 77, 138, 34))
+            showDebugInfo = !showDebugInfo;
+        else if (inside(centerX - 116, centerY - 153, 232, 38))
+            uiScreen = UiScreen::Pause;
+    }
+    uiClickWasDown = down;
+}
+
 void processInventoryMouse(GLFWwindow* window) {
     bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     if (!inventoryOpen) {
@@ -804,6 +877,11 @@ void processInventoryMouse(GLFWwindow* window) {
 }
 
 void processBlocks(GLFWwindow* window, float dt) {
+    if (uiScreen != UiScreen::Gameplay) {
+        leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        return;
+    }
     if (inventoryOpen) {
         leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
@@ -1113,6 +1191,97 @@ void drawUI() {
     const glm::vec3 white = {0.91f,0.94f,0.96f};
     const glm::vec3 muted = {0.47f,0.54f,0.62f};
 
+    auto glyph = [](char raw) -> std::array<unsigned char, 7> {
+        char c = raw >= 'a' && raw <= 'z' ? static_cast<char>(raw - 'a' + 'A') : raw;
+        static const std::array<std::array<unsigned char, 7>, 36> font = {{
+            {{14,17,17,31,17,17,17}},{{30,17,17,30,17,17,30}},{{14,17,16,16,16,17,14}},
+            {{30,17,17,17,17,17,30}},{{31,16,16,30,16,16,31}},{{31,16,16,30,16,16,16}},
+            {{14,17,16,23,17,17,15}},{{17,17,17,31,17,17,17}},{{14,4,4,4,4,4,14}},
+            {{7,2,2,2,18,18,12}},{{17,18,20,24,20,18,17}},{{16,16,16,16,16,16,31}},
+            {{17,27,21,21,17,17,17}},{{17,25,21,19,17,17,17}},{{14,17,17,17,17,17,14}},
+            {{30,17,17,30,16,16,16}},{{14,17,17,17,21,18,13}},{{30,17,17,30,20,18,17}},
+            {{15,16,16,14,1,1,30}},{{31,4,4,4,4,4,4}},{{17,17,17,17,17,17,14}},
+            {{17,17,17,17,17,10,4}},{{17,17,17,21,21,21,10}},{{17,17,10,4,10,17,17}},
+            {{17,17,10,4,4,4,4}},{{31,1,2,4,8,16,31}},
+            {{14,17,19,21,25,17,14}},{{4,12,4,4,4,4,14}},{{14,17,1,2,4,8,31}},
+            {{30,1,1,14,1,1,30}},{{2,6,10,18,31,2,2}},{{31,16,16,30,1,1,30}},
+            {{14,16,16,30,17,17,14}},{{31,1,2,4,8,8,8}},{{14,17,17,14,17,17,14}},
+            {{14,17,17,15,1,1,14}}
+        }};
+        if (c >= 'A' && c <= 'Z') return font[static_cast<std::size_t>(c - 'A')];
+        if (c >= '0' && c <= '9') return font[static_cast<std::size_t>(26 + c - '0')];
+        if (c == '-') return {{0,0,0,31,0,0,0}};
+        if (c == '.') return {{0,0,0,0,0,12,12}};
+        if (c == ':') return {{0,12,12,0,12,12,0}};
+        if (c == '/') return {{1,2,2,4,8,8,16}};
+        if (c == '+') return {{0,4,4,31,4,4,0}};
+        return {{0,0,0,0,0,0,0}};
+    };
+
+    auto drawText = [&](const std::string& value, int x, int y, int scale,
+                        const glm::vec3& color, bool centered = false) {
+        int width = value.empty() ? 0 : static_cast<int>(value.size()) * 6 * scale - scale;
+        int cursor = centered ? x - width / 2 : x;
+        for (char c : value) {
+            auto rows = glyph(c);
+            for (int row = 0; row < 7; ++row)
+                for (int column = 0; column < 5; ++column)
+                    if (rows[static_cast<std::size_t>(row)] & (1u << (4 - column)))
+                        drawUiRect(cursor + column * scale, y + (6 - row) * scale,
+                                   scale, scale, color);
+            cursor += 6 * scale;
+        }
+    };
+
+    auto drawButton = [&](int x, int y, int width, int height, const std::string& label,
+                          bool highlighted = false) {
+        drawUiRect(x, y, width, height, highlighted ? glm::vec3(0.78f,0.59f,0.18f) : panelEdge);
+        drawUiRect(x + 2, y + 2, width - 4, height - 4,
+                   highlighted ? glm::vec3(0.18f,0.15f,0.09f) : slotColor);
+        drawText(label, x + width / 2, y + (height - 7 * 2) / 2 + 1, 2,
+                 highlighted ? glm::vec3(1.0f,0.88f,0.54f) : white, true);
+    };
+
+    if (uiScreen == UiScreen::Pause || uiScreen == UiScreen::Settings) {
+        const int panelWidth = uiScreen == UiScreen::Pause ? 360 : 430;
+        const int panelHeight = 340;
+        const int left = centerX - panelWidth / 2;
+        const int bottom = centerY - panelHeight / 2;
+        drawUiRect(left - 4, bottom - 4, panelWidth + 8, panelHeight + 8, {0.015f,0.02f,0.03f});
+        drawUiRect(left, bottom, panelWidth, panelHeight, panelEdge);
+        drawUiRect(left + 3, bottom + 3, panelWidth - 6, panelHeight - 6, panel);
+        drawUiRect(left + 16, bottom + panelHeight - 64, panelWidth - 32, 2, {0.34f,0.42f,0.50f});
+        drawText(uiScreen == UiScreen::Pause ? "GAME PAUSED" : "SETTINGS",
+                 centerX, bottom + panelHeight - 48, 3, white, true);
+        if (uiScreen == UiScreen::Pause) {
+            drawButton(centerX - 116, centerY + 48, 232, 38, "RESUME", true);
+            drawButton(centerX - 116, centerY + 1, 232, 38, "SAVE WORLD");
+            drawButton(centerX - 116, centerY - 46, 232, 38, "SETTINGS");
+            drawButton(centerX - 116, centerY - 93, 232, 38, "QUIT GAME");
+            drawText("ESC  RESUME", centerX, bottom + 13, 1, muted, true);
+        } else {
+            drawText("FIELD OF VIEW", left + 28, centerY + 48, 2, white);
+            drawButton(left + 274, centerY + 35, 42, 34, "-");
+            drawText(std::to_string(static_cast<int>(fieldOfView)), left + 336, centerY + 48, 2, white, true);
+            drawButton(left + 370, centerY + 35, 42, 34, "+");
+            drawText("MOUSE SENSITIVITY", left + 28, centerY - 8, 2, white);
+            drawButton(left + 274, centerY - 21, 42, 34, "-");
+            drawText(std::to_string(static_cast<int>(mouseSensitivity * 1000.0f)),
+                     left + 336, centerY - 8, 2, white, true);
+            drawButton(left + 370, centerY - 21, 42, 34, "+");
+            drawText("DEBUG INFO", left + 28, centerY - 64, 2, white);
+            drawButton(left + 274, centerY - 77, 138, 34, showDebugInfo ? "ON" : "OFF", showDebugInfo);
+            drawButton(centerX - 116, bottom + 17, 232, 38, "BACK", true);
+        }
+    }
+
+    if (uiScreen != UiScreen::Gameplay) {
+        glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+        return;
+    }
+
     if (!inventoryOpen) {
         drawUiRect(centerX - 1, centerY - 10, 3, 21, {0.015f,0.02f,0.025f});
         drawUiRect(centerX - 10, centerY - 1, 21, 3, {0.015f,0.02f,0.025f});
@@ -1277,6 +1446,7 @@ int main() {
         worldTime += dt;
 
         processInput(window, dt);
+        processUiMouse(window);
         processInventoryMouse(window);
         processBlocks(window, dt);
         playerStats.tick(dt, playerMoving, playerSprinting);
@@ -1295,7 +1465,7 @@ int main() {
         glClearColor(sky.r, sky.g, sky.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glm::mat4 projection = glm::perspective(glm::radians(76.0f),
+        glm::mat4 projection = glm::perspective(glm::radians(fieldOfView),
             static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f, 120.0f);
         glm::vec3 front = cameraFront();
         glm::mat4 view = glm::lookAt(player, player + front, glm::vec3(0,1,0));
@@ -1314,13 +1484,16 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 27.4 | " + std::to_string(static_cast<int>(fps)) +
-                " FPS | Chunks " + std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
-                " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
-                std::to_string(static_cast<int>(player.y)) + "," +
-                std::to_string(static_cast<int>(player.z)) +
-                (inventoryOpen ? " | Inventory" : "") +
-                " | HP:" + std::to_string(static_cast<int>(playerStats.health())) +
+            std::string title = "MiniCraft3D 27.4";
+            if (showDebugInfo) {
+                title += " | " + std::to_string(static_cast<int>(fps)) + " FPS | Chunks " +
+                    std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
+                    " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
+                    std::to_string(static_cast<int>(player.y)) + "," +
+                    std::to_string(static_cast<int>(player.z));
+            }
+            title += (inventoryOpen ? " | Inventory" : "") +
+                std::string(" | HP:") + std::to_string(static_cast<int>(playerStats.health())) +
                 " Hunger:" + std::to_string(static_cast<int>(playerStats.hunger())) +
                 " | Items:" + inventorySummary() +
                 (lastCraftMessage.empty() ? "" : " | " + lastCraftMessage);
