@@ -133,7 +133,7 @@ const glm::vec3 faceNormals[6] = {
 };
 
 uint32_t hashNoise(int x, int y, int seed) {
-    uint32_t n = static_cast<uint32_t>(x * 374761393 + y * 668265263 + seed * 1442695041u);
+    uint32_t n = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 1442695041u;
     n = (n ^ (n >> 13)) * 1274126177u;
     return n ^ (n >> 16);
 }
