@@ -1,16 +1,22 @@
 # MiniCraft3D 27.1
 
-A small Minecraft-inspired sandbox written in C++17 and OpenGL 3.3 Core. No game engine.
+A Minecraft-inspired voxel sandbox written from scratch in C++17 and OpenGL 3.3 Core. No game engine.
 
-## Features
+## Current features
 
-- First-person movement, mouse look, jumping and sprinting
-- Procedural 64x64 terrain with hills, trees, sand patches and decorative blocks
-- Eight block types and a generated pixel-art texture atlas
-- Hidden-face culling and a single combined world mesh draw call
-- Break/place blocks, hotbar selection and scroll-wheel switching
-- Directional lighting, a slow day/night tint, distance fog and target outline
-- Live FPS and player coordinates in the window title
+- Chunk-based mesh storage: 16 independent chunks, each with its own GPU vertex buffer
+- Frustum culling: chunks outside the camera view are skipped
+- Hidden-face removal across chunk borders
+- Vertex ambient occlusion for softer voxel corners
+- Procedural 9-tile pixel-art texture atlas generated at startup
+- Procedural plains, forest, desert and snowy regions
+- Underground caves and small ore deposits
+- First-person controls, collision, jumping and sprinting
+- Block placement and breaking with a target outline
+- Eight hotbar slots and mouse-wheel selection
+- Animated daylight, sky tint and distance fog
+- World persistence in `MiniCraft3D.world`
+- FPS, visible-chunk count and player coordinates in the window title
 
 ## Requirements
 
@@ -19,7 +25,7 @@ A small Minecraft-inspired sandbox written in C++17 and OpenGL 3.3 Core. No game
 - GCC/G++
 - GLFW, GLEW and GLM
 
-Install libraries in the MSYS2 UCRT64 terminal:
+Install the required packages in the MSYS2 UCRT64 terminal:
 
 ```bash
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glew mingw-w64-ucrt-x86_64-glm
@@ -41,6 +47,10 @@ Run `build.bat` from the project directory. Then launch `MiniCraft3D.exe`.
 | Right click | Place block |
 | 1-8 | Select block |
 | Mouse wheel | Change selected block |
+| F5 | Save world |
+| F9 | Load world |
 | Esc | Exit |
 
-Textures are generated procedurally at startup and packed into a nearest-filtered atlas; no external image loader is required.
+The world is saved automatically when the game exits. Keep `MiniCraft3D.world` beside the executable to load the same world next time.
+
+Textures are generated procedurally and packed into a nearest-filtered atlas. No external image loader or texture files are required.
