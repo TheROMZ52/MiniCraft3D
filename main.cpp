@@ -1116,6 +1116,28 @@ glm::vec3 uiColor(int id) {
     }
 }
 
+std::string uiItemName(int id) {
+    switch (id) {
+        case 1: return "Grass";
+        case 2: return "Dirt";
+        case 3: return "Stone";
+        case 4: return "Log";
+        case 5: return "Leaves";
+        case 6: return "Sand";
+        case 7: return "Snow";
+        case 8: return "Ore";
+        case 9: return "Planks";
+        case 10: return "Sticks";
+        case 11: return "Crafting Table";
+        case 20: return "Wooden Pickaxe";
+        case 21: return "Stone Pickaxe";
+        case 22: return "Wooden Axe";
+        case 23: return "Wooden Shovel";
+        case 24: return "Wooden Sword";
+        default: return "Item";
+    }
+}
+
 void drawUiRect(int x, int y, int width, int height, const glm::vec3& color) {
     if (width <= 0 || height <= 0) return;
     glScissor(x, y, width, height);
@@ -1258,7 +1280,8 @@ void drawUI() {
             drawButton(centerX - 116, centerY + 1, 232, 38, "SAVE WORLD");
             drawButton(centerX - 116, centerY - 46, 232, 38, "SETTINGS");
             drawButton(centerX - 116, centerY - 93, 232, 38, "QUIT GAME");
-            drawText("ESC  RESUME", centerX, bottom + 13, 1, muted, true);
+            drawText(lastCraftMessage.empty() ? "ESC  RESUME" : lastCraftMessage,
+                     centerX, bottom + 13, 1, muted, true);
         } else {
             drawText("FIELD OF VIEW", left + 28, centerY + 48, 2, white);
             drawButton(left + 274, centerY + 35, 42, 34, "-");
@@ -1343,6 +1366,8 @@ void drawUI() {
                          false, static_cast<std::size_t>(index), 0);
             }
         }
+        drawText("INVENTORY", centerX, 235, 2, white, true);
+        drawText("CLICK A SLOT TO SWAP", centerX, 53, 1, muted, true);
     }
 
     for (int i = 0; i < HOTBAR_SIZE; ++i) {
@@ -1352,6 +1377,9 @@ void drawUI() {
     }
 
     if (!inventoryOpen) {
+        const mc::ItemStack& selectedStack = inventory.slot(static_cast<std::size_t>(selectedBlock - 1));
+        if (selectedStack.itemId > 0)
+            drawText(uiItemName(selectedStack.itemId), centerX, hotbarY + hotbarBox + 29, 2, white, true);
         const int iconY = hotbarY + hotbarBox + 13;
         const int iconStart = centerX - 190;
         for (int i = 0; i < 10; ++i) {
