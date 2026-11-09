@@ -2,16 +2,22 @@ name: Windows build
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
     paths:
       - "main.cpp"
+      - "src/**"
+      - "tests/**"
       - "build.bat"
+      - "README.md"
       - ".github/workflows/windows-build.yml"
   pull_request:
     branches: [main]
     paths:
       - "main.cpp"
+      - "src/**"
+      - "tests/**"
       - "build.bat"
+      - "README.md"
       - ".github/workflows/windows-build.yml"
   workflow_dispatch:
 
@@ -36,12 +42,17 @@ jobs:
             mingw-w64-ucrt-x86_64-glfw
             mingw-w64-ucrt-x86_64-glew
             mingw-w64-ucrt-x86_64-glm
-      - name: Compile
+      - name: Test gameplay systems
         shell: msys2 {0}
-        run: g++ main.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
+        run: |
+          g++ tests/gameplay_tests.cpp src/gameplay/gameplay.cpp -o gameplay-tests.exe -std=c++17 -Wall -Wextra
+          ./gameplay-tests.exe
+      - name: Compile game
+        shell: msys2 {0}
+        run: g++ main.cpp src/gameplay/gameplay.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCraft3D-27.1-Windows
+          name: MiniCraft3D-27.2-Windows
           path: MiniCraft3D.exe
           if-no-files-found: error

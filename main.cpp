@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include "src/gameplay/gameplay.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <utility>
 
 constexpr int WORLD_X = 64;
 constexpr int WORLD_Y = 32;
@@ -39,6 +41,15 @@ bool rightWasDown = false;
 bool saveWasDown = false;
 bool loadWasDown = false;
 int selectedBlock = 1;
+mc::Inventory inventory;
+std::vector<mc::ItemDrop> itemDrops;
+bool inventoryOpen = false;
+bool inventoryWasDown = false;
+bool craftWasDown = false;
+bool inventoryClickWasDown = false;
+double mouseX = 0.0;
+double mouseY = 0.0;
+std::string lastCraftMessage;
 int screenWidth = 1280;
 int screenHeight = 720;
 float worldTime = 0.0f;
@@ -183,13 +194,14 @@ glm::vec3 baseColor(int tile) {
         case 6: return {0.88f,0.91f,0.96f};
         case 7: return {0.72f,0.48f,0.16f};
         case 8: return {0.39f,0.25f,0.12f};
+        case 9: return {0.68f,0.43f,0.22f};
         default: return {0.28f,0.68f,0.17f};
     }
 }
 
 void createAtlas() {
     constexpr int tileSize = 16;
-    constexpr int columns = 9;
+    constexpr int columns = 10;
     std::vector<unsigned char> pixels(tileSize * columns * tileSize * 4);
     for (int tile = 0; tile < columns; ++tile) {
         glm::vec3 base = baseColor(tile);
@@ -364,6 +376,14 @@ glm::vec3 cameraFront() {
 }
 
 void mouseCallback(GLFWwindow*, double xpos, double ypos) {
+    mouseX = xpos;
+    mouseY = ypos;
+    if (inventoryOpen) {
+        lastX = static_cast<float>(xpos);
+        lastY = static_cast<float>(ypos);
+        firstMouse = true;
+        return;
+    }
     if (firstMouse) {
         lastX = static_cast<float>(xpos);
         lastY = static_cast<float>(ypos);
@@ -418,6 +438,7 @@ int tileForBlock(int id, int face) {
     if (id == 6) return 5;
     if (id == 7) return 6;
     if (id == 8) return 7;
+    if (id == 9) return 9;
     return 2;
 }
 
@@ -449,7 +470,7 @@ float vertexAO(int x, int y, int z, int face, int corner) {
 
 void addFace(std::vector<Vertex>& vertices, int localX, int y, int localZ,
              int worldX, int worldZ, int id, int face) {
-    constexpr float atlasWidth = 144.0f;
+    constexpr float atlasWidth = 160.0f;
     constexpr float tileSize = 16.0f;
     int tile = tileForBlock(id, face);
     float u0 = (tile * tileSize + 0.5f) / atlasWidth;
@@ -555,18 +576,28 @@ void saveWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    Header header{{'M','C','3','D','2','7','1','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
+    Header header{{'M','C','3','D','2','7','2','\\0'}, WORLD_X, WORLD_Y, WORLD_Z};
     float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
     std::ofstream file("MiniCraft3D.world", std::ios::binary | std::ios::trunc);
     if (!file) {
-        std::cerr << "Could not save world.\n";
+        std::cerr << "Could not save world.\\n";
         return;
     }
     file.write(reinterpret_cast<const char*>(&header), sizeof(header));
     file.write(reinterpret_cast<const char*>(world), sizeof(world));
     file.write(reinterpret_cast<const char*>(playerData), sizeof(playerData));
-    if (file) std::cout << "World saved: MiniCraft3D.world\n";
-    else std::cerr << "World save failed.\n";
+    file.write(reinterpret_cast<const char*>(inventory.slots().data()),
+               static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
+    uint32_t dropCount = static_cast<uint32_t>(itemDrops.size());
+    file.write(reinterpret_cast<const char*>(&dropCount), sizeof(dropCount));
+    for (const mc::ItemDrop& drop : itemDrops) {
+        int32_t itemData[2] = {drop.itemId, drop.count};
+        float state[7] = {drop.x, drop.y, drop.z, drop.vx, drop.vy, drop.vz, drop.age};
+        file.write(reinterpret_cast<const char*>(itemData), sizeof(itemData));
+        file.write(reinterpret_cast<const char*>(state), sizeof(state));
+    }
+    if (file) std::cout << "World saved: MiniCraft3D.world\\n";
+    else std::cerr << "World save failed.\\n";
 }
 
 bool loadWorld() {
@@ -582,17 +613,54 @@ bool loadWorld() {
     int loaded[WORLD_X][WORLD_Y][WORLD_Z]{};
     float playerData[5]{};
     file.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!file || std::memcmp(header.magic, "MC3D271", 7) != 0 ||
+    bool oldFormat = std::memcmp(header.magic, "MC3D271", 7) == 0;
+    bool currentFormat = std::memcmp(header.magic, "MC3D272", 7) == 0;
+    if (!file || (!oldFormat && !currentFormat) ||
         header.width != WORLD_X || header.height != WORLD_Y || header.depth != WORLD_Z)
         return false;
     file.read(reinterpret_cast<char*>(loaded), sizeof(loaded));
     file.read(reinterpret_cast<char*>(playerData), sizeof(playerData));
-    if (!file) return false;
+    if (!file || !std::isfinite(playerData[0]) || !std::isfinite(playerData[1]) ||
+        !std::isfinite(playerData[2]) || !std::isfinite(playerData[3]) ||
+        !std::isfinite(playerData[4])) return false;
+
+    std::array<mc::ItemStack, mc::InventorySize> loadedInventory{};
+    std::vector<mc::ItemDrop> loadedDrops;
+    if (currentFormat) {
+        file.read(reinterpret_cast<char*>(loadedInventory.data()),
+                  static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
+        uint32_t dropCount = 0;
+        file.read(reinterpret_cast<char*>(&dropCount), sizeof(dropCount));
+        if (!file || dropCount > 4096) return false;
+        loadedDrops.reserve(dropCount);
+        for (uint32_t i = 0; i < dropCount; ++i) {
+            int32_t itemData[2]{};
+            float state[7]{};
+            file.read(reinterpret_cast<char*>(itemData), sizeof(itemData));
+            file.read(reinterpret_cast<char*>(state), sizeof(state));
+            if (!file) return false;
+            if (itemData[0] <= 0 || itemData[1] <= 0) continue;
+            mc::ItemDrop drop;
+            drop.itemId = itemData[0];
+            drop.count = itemData[1];
+            drop.x = state[0];
+            drop.y = state[1];
+            drop.z = state[2];
+            drop.vx = state[3];
+            drop.vy = state[4];
+            drop.vz = state[5];
+            drop.age = state[6];
+            loadedDrops.push_back(drop);
+        }
+    }
+
     std::memcpy(world, loaded, sizeof(world));
     player = glm::vec3(playerData[0], playerData[1], playerData[2]);
     yaw = playerData[3];
     pitch = std::clamp(playerData[4], -89.0f, 89.0f);
     velocity = glm::vec3(0.0f);
+    inventory.replace(loadedInventory);
+    itemDrops = std::move(loadedDrops);
     return true;
 }
 
@@ -601,6 +669,22 @@ void processInput(GLFWwindow* window, float dt) {
         glfwSetWindowShouldClose(window, true);
     for (int i = 0; i < HOTBAR_SIZE; ++i)
         if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) selectedBlock = i + 1;
+
+    bool inventoryDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+    bool craftDown = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+    if (inventoryDown && !inventoryWasDown) {
+        inventoryOpen = !inventoryOpen;
+        glfwSetInputMode(window, GLFW_CURSOR, inventoryOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+        firstMouse = true;
+    }
+    if (craftDown && !craftWasDown) {
+        int crafted = mc::Crafting::craftFirstAvailable(inventory);
+        lastCraftMessage = crafted >= 0
+            ? std::string("Crafted ") + mc::Crafting::recipe(static_cast<std::size_t>(crafted)).name
+            : "No available recipe";
+    }
+    inventoryWasDown = inventoryDown;
+    craftWasDown = craftDown;
 
     bool saveDown = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
     bool loadDown = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
@@ -611,6 +695,7 @@ void processInput(GLFWwindow* window, float dt) {
     }
     saveWasDown = saveDown;
     loadWasDown = loadDown;
+    if (inventoryOpen) return;
 
     glm::vec3 front = cameraFront();
     glm::vec3 forward = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
@@ -650,7 +735,49 @@ void processInput(GLFWwindow* window, float dt) {
     }
 }
 
+glm::vec3 uiColor(int id);
+void setFrameUniforms(const glm::mat4& view, const glm::mat4& projection,
+                      const glm::vec3& camera, const glm::vec3& fog);
+
+void processInventoryMouse(GLFWwindow* window) {
+    bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    if (!inventoryOpen) {
+        inventoryClickWasDown = down;
+        return;
+    }
+    if (down && !inventoryClickWasDown) {
+        const int box = 42;
+        const int gap = 5;
+        const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+        const int start = (screenWidth - total) / 2;
+        int x = static_cast<int>(mouseX);
+        int y = screenHeight - static_cast<int>(mouseY);
+        int column = (x - start) / (box + gap);
+        if (column >= 0 && column < HOTBAR_SIZE) {
+            int slotX = start + column * (box + gap);
+            if (x >= slotX && x < slotX + box && y >= 18 && y < 18 + box) {
+                selectedBlock = column + 1;
+            } else {
+                for (int row = 0; row < 3; ++row) {
+                    int slotY = 18 + (3 - row) * (box + gap) + 12;
+                    if (x < slotX || x >= slotX + box || y < slotY || y >= slotY + box) continue;
+                    std::size_t backpackIndex = static_cast<std::size_t>(8 + row * 8 + column);
+                    std::size_t hotbarIndex = static_cast<std::size_t>(selectedBlock - 1);
+                    std::swap(inventory.slot(backpackIndex), inventory.slot(hotbarIndex));
+                    break;
+                }
+            }
+        }
+    }
+    inventoryClickWasDown = down;
+}
+
 void processBlocks(GLFWwindow* window) {
+    if (inventoryOpen) {
+        leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        return;
+    }
     glm::ivec3 hit, previous;
     bool found = raycast(hit, previous);
     bool left = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
@@ -658,22 +785,88 @@ void processBlocks(GLFWwindow* window) {
     bool changed = false;
 
     if (left && !leftWasDown && found) {
+        int brokenBlock = world[hit.x][hit.y][hit.z];
         world[hit.x][hit.y][hit.z] = 0;
+        mc::ItemDrop drop;
+        drop.itemId = brokenBlock;
+        drop.count = 1;
+        drop.x = static_cast<float>(hit.x);
+        drop.y = static_cast<float>(hit.y);
+        drop.z = static_cast<float>(hit.z);
+        drop.vx = 0.0f;
+        drop.vy = 1.8f;
+        drop.vz = 0.0f;
+        itemDrops.push_back(drop);
         markChunkDirty(hit.x, hit.z);
         changed = true;
     }
-    if (right && !rightWasDown && found && insideWorld(previous.x, previous.y, previous.z) &&
+
+    const mc::ItemStack held = inventory.slot(static_cast<std::size_t>(selectedBlock - 1));
+    if (right && !rightWasDown && found && held.itemId >= 1 && held.itemId <= 9 &&
+        held.count > 0 && insideWorld(previous.x, previous.y, previous.z) &&
         world[previous.x][previous.y][previous.z] == 0) {
-        world[previous.x][previous.y][previous.z] = selectedBlock;
+        world[previous.x][previous.y][previous.z] = held.itemId;
         if (collides(player)) world[previous.x][previous.y][previous.z] = 0;
-        else {
+        else if (inventory.removeItem(held.itemId, 1)) {
             markChunkDirty(previous.x, previous.z);
             changed = true;
+        } else {
+            world[previous.x][previous.y][previous.z] = 0;
         }
     }
+
     leftWasDown = left;
     rightWasDown = right;
     if (changed) rebuildDirtyChunks();
+}
+
+void updateDrops(float dt) {
+    for (std::size_t i = 0; i < itemDrops.size();) {
+        mc::ItemDrop& drop = itemDrops[i];
+        drop.age += dt;
+        drop.vy = std::max(drop.vy - 12.0f * dt, -12.0f);
+        drop.x += drop.vx * dt;
+        drop.z += drop.vz * dt;
+        float nextY = drop.y + drop.vy * dt;
+        int bx = static_cast<int>(std::floor(drop.x + 0.5f));
+        int by = static_cast<int>(std::floor(nextY - 0.12f + 0.5f));
+        int bz = static_cast<int>(std::floor(drop.z + 0.5f));
+        if (solidAt(bx, by, bz)) {
+            drop.vy = 0.0f;
+            drop.y = static_cast<float>(by) + 0.62f;
+        } else {
+            drop.y = nextY;
+        }
+        drop.vx *= std::max(0.0f, 1.0f - 3.0f * dt);
+        drop.vz *= std::max(0.0f, 1.0f - 3.0f * dt);
+
+        glm::vec3 delta(drop.x - player.x, drop.y - (player.y - 0.8f), drop.z - player.z);
+        if (glm::dot(delta, delta) < 2.25f) {
+            int remaining = inventory.addItem(drop.itemId, drop.count);
+            if (remaining == 0) {
+                itemDrops.erase(itemDrops.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            drop.count = remaining;
+        }
+        ++i;
+    }
+}
+
+void renderDrops(const glm::mat4& view, const glm::mat4& projection,
+                 const glm::vec3& camera, const glm::vec3& fog) {
+    if (itemDrops.empty()) return;
+    setFrameUniforms(view, projection, camera, fog);
+    glUniform1i(locTextured, 0);
+    glBindVertexArray(cubeVAO);
+    for (const mc::ItemDrop& drop : itemDrops) {
+        glm::vec3 color = uiColor(drop.itemId);
+        glUniform3fv(locSolidColor, 1, glm::value_ptr(color));
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(drop.x, drop.y, drop.z));
+        model = glm::scale(model, glm::vec3(0.22f));
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+    }
 }
 
 glm::vec4 matrixRow(const glm::mat4& m, int row) {
@@ -774,7 +967,11 @@ glm::vec3 uiColor(int id) {
         case 5: return {0.13f,0.42f,0.12f};
         case 6: return {0.78f,0.69f,0.43f};
         case 7: return {0.88f,0.91f,0.96f};
-        default: return {0.72f,0.48f,0.16f};
+        case 8: return {0.72f,0.48f,0.16f};
+        case 9: return {0.68f,0.43f,0.22f};
+        case 10: return {0.78f,0.78f,0.82f};
+        case 11: return {0.58f,0.35f,0.18f};
+        default: return {0.2f,0.2f,0.2f};
     }
 }
 
@@ -792,28 +989,57 @@ void drawUI() {
 
     const int box = 42;
     const int gap = 5;
-    const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+    const int total = static_cast<int>(HOTBAR_SIZE) * box +
+                      (static_cast<int>(HOTBAR_SIZE) - 1) * gap;
     const int start = (screenWidth - total) / 2;
-    for (int i = 0; i < HOTBAR_SIZE; ++i) {
-        int x = start + i * (box + gap);
-        glScissor(x, 18, box, box);
+    auto drawSlot = [&](int x, int y, const mc::ItemStack& stack, bool selected) {
+        glScissor(x, y, box, box);
         glClearColor(0.035f, 0.045f, 0.06f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        glScissor(x + 5, 23, box - 10, box - 10);
-        glm::vec3 color = uiColor(i + 1);
-        glClearColor(color.r, color.g, color.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        if (i + 1 == selectedBlock) {
-            glScissor(x - 2, 16, box + 4, 2);
-            glClearColor(1.0f, 0.83f, 0.2f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-            glScissor(x - 2, 60, box + 4, 2);
+        if (stack.itemId > 0 && stack.count > 0) {
+            glm::vec3 color = uiColor(stack.itemId);
+            glScissor(x + 5, y + 5, box - 10, box - 10);
+            glClearColor(color.r, color.g, color.b, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
         }
+        if (selected) {
+            glScissor(x - 2, y - 2, box + 4, 2);
+            glClearColor(1.0f, 0.83f, 0.2f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glScissor(x - 2, y + box, box + 4, 2);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+    };
+
+    if (inventoryOpen) {
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 8; ++column) {
+                int index = 8 + row * 8 + column;
+                int x = start + column * (box + gap);
+                int y = 18 + (3 - row) * (box + gap) + 12;
+                drawSlot(x, y, inventory.slot(static_cast<std::size_t>(index)), false);
+            }
+        }
     }
+
+    for (int i = 0; i < HOTBAR_SIZE; ++i) {
+        int x = start + i * (box + gap);
+        drawSlot(x, 18, inventory.slot(static_cast<std::size_t>(i)), i + 1 == selectedBlock);
+    }
+
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
+}
+
+std::string inventorySummary() {
+    std::string summary;
+    for (std::size_t i = 0; i < mc::InventorySize; ++i) {
+        const mc::ItemStack& stack = inventory.slot(i);
+        if (stack.itemId <= 0 || stack.count <= 0) continue;
+        summary += " " + std::to_string(stack.itemId) + "x" + std::to_string(stack.count);
+    }
+    return summary;
 }
 
 void framebufferCallback(GLFWwindow*, int w, int h) {
@@ -832,7 +1058,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.1", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.2", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -881,7 +1107,9 @@ int main() {
         worldTime += dt;
 
         processInput(window, dt);
+        processInventoryMouse(window);
         processBlocks(window);
+        updateDrops(dt);
 
         float daylight = 0.5f + 0.5f * std::sin(worldTime * 0.04f);
         glm::vec3 nightSky(0.025f,0.035f,0.09f);
@@ -896,6 +1124,7 @@ int main() {
         glm::mat4 view = glm::lookAt(player, player + front, glm::vec3(0,1,0));
 
         visibleChunks = renderWorld(view, projection, player, sky);
+        renderDrops(view, projection, player, sky);
         renderTarget(view, projection, player, sky);
         drawUI();
 
@@ -908,11 +1137,14 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 27.1 | " + std::to_string(static_cast<int>(fps)) +
+            std::string title = "MiniCraft3D 27.2 | " + std::to_string(static_cast<int>(fps)) +
                 " FPS | Chunks " + std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
                 " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
                 std::to_string(static_cast<int>(player.y)) + "," +
-                std::to_string(static_cast<int>(player.z));
+                std::to_string(static_cast<int>(player.z)) +
+                (inventoryOpen ? " | Inventory" : "") +
+                " | Items:" + inventorySummary() +
+                (lastCraftMessage.empty() ? "" : " | " + lastCraftMessage);
             glfwSetWindowTitle(window, title.c_str());
         }
     }

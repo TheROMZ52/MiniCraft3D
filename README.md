@@ -1,22 +1,28 @@
-# MiniCraft3D 27.1
+# MiniCraft3D 27.2
 
-A Minecraft-inspired voxel sandbox written from scratch in C++17 and OpenGL 3.3 Core. No game engine.
+A Minecraft-inspired voxel sandbox written in C++17 and OpenGL 3.3 Core. No game engine.
 
-## Current features
+## Gameplay
 
-- Chunk-based mesh storage: 16 independent chunks, each with its own GPU vertex buffer
-- Frustum culling: chunks outside the camera view are skipped
-- Hidden-face removal across chunk borders
-- Vertex ambient occlusion for softer voxel corners
-- Procedural 9-tile pixel-art texture atlas generated at startup
+- 32-slot inventory with an 8-slot hotbar
+- Stack merging with a 64-item stack limit
+- Block drops with simple physics and proximity pickup
+- Item placement consumes inventory stacks
+- Recipe-based crafting: logs to planks, planks to sticks, and planks to a crafting table
+- Inventory and dropped items are saved with the world
+- Backward-compatible loading of 27.1 world saves
+
+## World and rendering
+
+- 16 independent chunk meshes with separate GPU vertex buffers
+- Frustum culling and hidden-face removal across chunk borders
+- Vertex ambient occlusion
+- Procedural 10-tile pixel-art texture atlas
 - Procedural plains, forest, desert and snowy regions
 - Underground caves and small ore deposits
-- First-person controls, collision, jumping and sprinting
+- First-person movement, collision, jumping and sprinting
 - Block placement and breaking with a target outline
-- Eight hotbar slots and mouse-wheel selection
 - Animated daylight, sky tint and distance fog
-- World persistence in `MiniCraft3D.world`
-- FPS, visible-chunk count and player coordinates in the window title
 
 ## Requirements
 
@@ -43,14 +49,22 @@ Run `build.bat` from the project directory. Then launch `MiniCraft3D.exe`.
 | Mouse | Look |
 | Space | Jump |
 | Left Shift | Sprint |
-| Left click | Break block |
-| Right click | Place block |
-| 1-8 | Select block |
-| Mouse wheel | Change selected block |
+| Left click | Break block and drop its item |
+| Right click | Place the selected hotbar block |
+| 1-8 | Select hotbar slot |
+| Mouse wheel | Change selected hotbar slot |
+| E | Open or close the inventory panel |
+| C | Craft the first available recipe |
 | F5 | Save world |
 | F9 | Load world |
 | Esc | Exit |
 
-The world is saved automatically when the game exits. Keep `MiniCraft3D.world` beside the executable to load the same world next time.
+The inventory panel displays the 24 backpack slots above the hotbar. Click a backpack slot to swap it with the selected hotbar slot; click a hotbar slot to select it. Items are collected automatically when the player gets close to a drop. Crafting consumes ingredients from any inventory slot.
 
-Textures are generated procedurally and packed into a nearest-filtered atlas. No external image loader or texture files are required.
+Worlds are saved to `MiniCraft3D.world` on exit. Existing 27.1 saves remain loadable; the next save upgrades them to the 27.2 format.
+
+Textures are generated procedurally. No external image assets or image loader are required.
+
+## Tests
+
+The gameplay module has standalone tests for stack limits, item removal and crafting recipes. GitHub Actions runs these tests before compiling the Windows game.
