@@ -3,9 +3,24 @@ name: Windows build
 on:
   push:
     branches: [main]
+    paths:
+      - "main.cpp"
+      - "build.bat"
+      - ".github/workflows/windows-build.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "main.cpp"
+      - "build.bat"
+      - ".github/workflows/windows-build.yml"
   workflow_dispatch:
+
+concurrency:
+  group: minicraft3d-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -29,3 +44,4 @@ jobs:
         with:
           name: MiniCraft3D-27.1-Windows
           path: MiniCraft3D.exe
+          if-no-files-found: error
