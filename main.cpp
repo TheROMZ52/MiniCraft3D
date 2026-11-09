@@ -42,7 +42,12 @@ bool saveWasDown = false;
 bool loadWasDown = false;
 int selectedBlock = 1;
 mc::Inventory inventory;
+mc::PlayerStats playerStats;
 std::vector<mc::ItemDrop> itemDrops;
+bool playerMoving = false;
+bool playerSprinting = false;
+glm::ivec3 miningTarget(-999);
+float miningProgress = 0.0f;
 bool inventoryOpen = false;
 bool inventoryWasDown = false;
 bool craftWasDown = false;
@@ -576,7 +581,7 @@ void saveWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    Header header{{'M','C','3','D','2','7','2','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
+    Header header{{'M','C','3','D','2','7','3','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
     float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
     std::ofstream file("MiniCraft3D.world", std::ios::binary | std::ios::trunc);
     if (!file) {
@@ -588,6 +593,10 @@ void saveWorld() {
     file.write(reinterpret_cast<const char*>(playerData), sizeof(playerData));
     file.write(reinterpret_cast<const char*>(inventory.slots().data()),
                static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
+    file.write(reinterpret_cast<const char*>(inventory.durabilitySlots().data()),
+               static_cast<std::streamsize>(sizeof(int) * mc::InventorySize));
+    float statsData[2] = {playerStats.health(), playerStats.hunger()};
+    file.write(reinterpret_cast<const char*>(statsData), sizeof(statsData));
     uint32_t dropCount = static_cast<uint32_t>(itemDrops.size());
     file.write(reinterpret_cast<const char*>(&dropCount), sizeof(dropCount));
     for (const mc::ItemDrop& drop : itemDrops) {
@@ -615,7 +624,8 @@ bool loadWorld() {
     file.read(reinterpret_cast<char*>(&header), sizeof(header));
     bool oldFormat = std::memcmp(header.magic, "MC3D271", 7) == 0;
     bool currentFormat = std::memcmp(header.magic, "MC3D272", 7) == 0;
-    if (!file || (!oldFormat && !currentFormat) ||
+    bool survivalFormat = std::memcmp(header.magic, "MC3D273", 7) == 0;
+    if (!file || (!oldFormat && !currentFormat && !survivalFormat) ||
         header.width != WORLD_X || header.height != WORLD_Y || header.depth != WORLD_Z)
         return false;
     file.read(reinterpret_cast<char*>(loaded), sizeof(loaded));
@@ -625,10 +635,18 @@ bool loadWorld() {
         !std::isfinite(playerData[4])) return false;
 
     std::array<mc::ItemStack, mc::InventorySize> loadedInventory{};
+    std::array<int, mc::InventorySize> loadedDurability{};
+    float loadedStats[2] = {mc::PlayerStats::MaxHealth, mc::PlayerStats::MaxHunger};
     std::vector<mc::ItemDrop> loadedDrops;
-    if (currentFormat) {
+    if (currentFormat || survivalFormat) {
         file.read(reinterpret_cast<char*>(loadedInventory.data()),
                   static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
+        if (survivalFormat) {
+            file.read(reinterpret_cast<char*>(loadedDurability.data()),
+                      static_cast<std::streamsize>(sizeof(int) * mc::InventorySize));
+            file.read(reinterpret_cast<char*>(loadedStats), sizeof(loadedStats));
+            if (!file || !std::isfinite(loadedStats[0]) || !std::isfinite(loadedStats[1])) return false;
+        }
         uint32_t dropCount = 0;
         file.read(reinterpret_cast<char*>(&dropCount), sizeof(dropCount));
         if (!file || dropCount > 4096) return false;
@@ -659,7 +677,9 @@ bool loadWorld() {
     yaw = playerData[3];
     pitch = std::clamp(playerData[4], -89.0f, 89.0f);
     velocity = glm::vec3(0.0f);
-    inventory.replace(loadedInventory);
+    if (survivalFormat) inventory.replace(loadedInventory, loadedDurability);
+    else inventory.replace(loadedInventory);
+    playerStats.set(loadedStats[0], loadedStats[1]);
     itemDrops = std::move(loadedDrops);
     return true;
 }
@@ -695,18 +715,24 @@ void processInput(GLFWwindow* window, float dt) {
     }
     saveWasDown = saveDown;
     loadWasDown = loadDown;
-    if (inventoryOpen) return;
+    if (inventoryOpen) {
+        playerMoving = false;
+        playerSprinting = false;
+        return;
+    }
 
     glm::vec3 front = cameraFront();
     glm::vec3 forward = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
-    float speed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ? 8.5f : 5.2f;
+    playerSprinting = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+    float speed = playerSprinting ? 8.5f : 5.2f;
     glm::vec3 move(0.0f);
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) move += forward;
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) move -= forward;
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) move += right;
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) move -= right;
-    if (glm::length(move) > 0.0f) move = glm::normalize(move) * speed * dt;
+    playerMoving = glm::length(move) > 0.0f;
+    if (playerMoving) move = glm::normalize(move) * speed * dt;
 
     glm::vec3 next = player;
     next.x += move.x;
@@ -726,10 +752,15 @@ void processInput(GLFWwindow* window, float dt) {
         player.y = next.y;
         grounded = false;
     } else {
-        if (velocity.y < 0.0f) grounded = true;
+        if (velocity.y < 0.0f) {
+            grounded = true;
+            float impactSpeed = -velocity.y;
+            if (impactSpeed > 12.0f) playerStats.damage((impactSpeed - 12.0f) * 1.5f);
+        }
         velocity.y = 0.0f;
     }
     if (player.y < -12.0f) {
+        playerStats.damage(mc::PlayerStats::MaxHealth);
         player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
         velocity = glm::vec3(0.0f);
     }
@@ -763,7 +794,7 @@ void processInventoryMouse(GLFWwindow* window) {
                     if (x < slotX || x >= slotX + box || y < slotY || y >= slotY + box) continue;
                     std::size_t backpackIndex = static_cast<std::size_t>(8 + row * 8 + column);
                     std::size_t hotbarIndex = static_cast<std::size_t>(selectedBlock - 1);
-                    std::swap(inventory.slot(backpackIndex), inventory.slot(hotbarIndex));
+                    inventory.swapSlots(backpackIndex, hotbarIndex);
                     break;
                 }
             }
@@ -772,7 +803,7 @@ void processInventoryMouse(GLFWwindow* window) {
     inventoryClickWasDown = down;
 }
 
-void processBlocks(GLFWwindow* window) {
+void processBlocks(GLFWwindow* window, float dt) {
     if (inventoryOpen) {
         leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
@@ -784,21 +815,47 @@ void processBlocks(GLFWwindow* window) {
     bool right = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     bool changed = false;
 
-    if (left && !leftWasDown && found) {
+    if (left && found) {
+        if (hit != miningTarget) {
+            miningTarget = hit;
+            miningProgress = 0.0f;
+        }
         int brokenBlock = world[hit.x][hit.y][hit.z];
-        world[hit.x][hit.y][hit.z] = 0;
-        mc::ItemDrop drop;
-        drop.itemId = brokenBlock;
-        drop.count = 1;
-        drop.x = static_cast<float>(hit.x);
-        drop.y = static_cast<float>(hit.y);
-        drop.z = static_cast<float>(hit.z);
-        drop.vx = 0.0f;
-        drop.vy = 1.8f;
-        drop.vz = 0.0f;
-        itemDrops.push_back(drop);
-        markChunkDirty(hit.x, hit.z);
-        changed = true;
+        int heldItem = inventory.slot(static_cast<std::size_t>(selectedBlock - 1)).itemId;
+        float hardness = 1.0f;
+        if (brokenBlock == 3) hardness = 2.0f;
+        else if (brokenBlock == 8) hardness = 3.0f;
+        else if (brokenBlock == 4) hardness = 1.5f;
+        else if (brokenBlock == 5) hardness = 0.25f;
+        else if (brokenBlock == 1 || brokenBlock == 2 || brokenBlock == 6 || brokenBlock == 7)
+            hardness = 0.45f;
+        float efficiency = mc::Items::miningEfficiency(heldItem, brokenBlock);
+        if (!mc::Items::isTool(heldItem)) efficiency = 0.75f;
+        miningProgress += dt * efficiency / hardness;
+        if (miningProgress >= 1.0f) {
+            bool requiresPickaxe = brokenBlock == 3 || brokenBlock == 8;
+            bool harvestable = !requiresPickaxe || mc::Items::canHarvest(heldItem, brokenBlock);
+            world[hit.x][hit.y][hit.z] = 0;
+            if (harvestable) {
+                mc::ItemDrop drop;
+                drop.itemId = brokenBlock;
+                drop.count = 1;
+                drop.x = static_cast<float>(hit.x);
+                drop.y = static_cast<float>(hit.y);
+                drop.z = static_cast<float>(hit.z);
+                drop.vy = 1.8f;
+                itemDrops.push_back(drop);
+            }
+            if (mc::Items::isTool(heldItem))
+                inventory.damageItem(static_cast<std::size_t>(selectedBlock - 1));
+            markChunkDirty(hit.x, hit.z);
+            changed = true;
+            miningTarget = glm::ivec3(-999);
+            miningProgress = 0.0f;
+        }
+    } else {
+        miningTarget = glm::ivec3(-999);
+        miningProgress = 0.0f;
     }
 
     const mc::ItemStack held = inventory.slot(static_cast<std::size_t>(selectedBlock - 1));
@@ -971,6 +1028,11 @@ glm::vec3 uiColor(int id) {
         case 9: return {0.68f,0.43f,0.22f};
         case 10: return {0.78f,0.78f,0.82f};
         case 11: return {0.58f,0.35f,0.18f};
+        case 20: return {0.68f,0.48f,0.27f};
+        case 21: return {0.55f,0.58f,0.62f};
+        case 22: return {0.66f,0.43f,0.22f};
+        case 23: return {0.72f,0.61f,0.39f};
+        case 24: return {0.76f,0.76f,0.79f};
         default: return {0.2f,0.2f,0.2f};
     }
 }
@@ -1001,6 +1063,19 @@ void drawUI() {
             glScissor(x + 5, y + 5, box - 10, box - 10);
             glClearColor(color.r, color.g, color.b, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
+            int maximum = mc::Items::maxDurability(stack.itemId);
+            if (maximum > 0) {
+                float ratio = static_cast<float>(inventory.durability(
+                    static_cast<std::size_t>(selected ? selectedBlock - 1 : 8))) / maximum;
+                int barWidth = static_cast<int>((box - 10) * std::clamp(ratio, 0.0f, 1.0f));
+                glScissor(x + 5, y + 3, box - 10, 3);
+                glClearColor(0.12f, 0.08f, 0.06f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glScissor(x + 5, y + 3, barWidth, 3);
+                glClearColor(ratio > 0.5f ? 0.25f : (ratio > 0.2f ? 0.9f : 0.9f),
+                             ratio > 0.5f ? 0.8f : (ratio > 0.2f ? 0.65f : 0.2f), 0.18f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
         }
         if (selected) {
             glScissor(x - 2, y - 2, box + 4, 2);
@@ -1027,6 +1102,18 @@ void drawUI() {
         drawSlot(x, 18, inventory.slot(static_cast<std::size_t>(i)), i + 1 == selectedBlock);
     }
 
+    auto drawStatusBar = [&](int x, int y, float value, const glm::vec3& color) {
+        const int width = 150;
+        const int height = 9;
+        glScissor(x, y, width, height);
+        glClearColor(0.04f, 0.04f, 0.05f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glScissor(x, y, static_cast<int>(width * std::clamp(value / 20.0f, 0.0f, 1.0f)), height);
+        glClearColor(color.r, color.g, color.b, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    };
+    drawStatusBar(18, screenHeight - 24, playerStats.health(), {0.82f, 0.12f, 0.16f});
+    drawStatusBar(18, screenHeight - 40, playerStats.hunger(), {0.92f, 0.58f, 0.12f});
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
@@ -1058,7 +1145,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.2", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.3", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -1108,7 +1195,14 @@ int main() {
 
         processInput(window, dt);
         processInventoryMouse(window);
-        processBlocks(window);
+        processBlocks(window, dt);
+        playerStats.tick(dt, playerMoving, playerSprinting);
+        if (!playerStats.alive()) {
+            player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
+            velocity = glm::vec3(0.0f);
+            playerStats.set(mc::PlayerStats::MaxHealth, 12.0f);
+            lastCraftMessage = "Respawned";
+        }
         updateDrops(dt);
 
         float daylight = 0.5f + 0.5f * std::sin(worldTime * 0.04f);
@@ -1137,12 +1231,14 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 27.2 | " + std::to_string(static_cast<int>(fps)) +
+            std::string title = "MiniCraft3D 27.3 | " + std::to_string(static_cast<int>(fps)) +
                 " FPS | Chunks " + std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
                 " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
                 std::to_string(static_cast<int>(player.y)) + "," +
                 std::to_string(static_cast<int>(player.z)) +
                 (inventoryOpen ? " | Inventory" : "") +
+                " | HP:" + std::to_string(static_cast<int>(playerStats.health())) +
+                " Hunger:" + std::to_string(static_cast<int>(playerStats.hunger())) +
                 " | Items:" + inventorySummary() +
                 (lastCraftMessage.empty() ? "" : " | " + lastCraftMessage);
             glfwSetWindowTitle(window, title.c_str());
