@@ -576,11 +576,11 @@ void saveWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    Header header{{'M','C','3','D','2','7','2','\\0'}, WORLD_X, WORLD_Y, WORLD_Z};
+    Header header{{'M','C','3','D','2','7','2','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
     float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
     std::ofstream file("MiniCraft3D.world", std::ios::binary | std::ios::trunc);
     if (!file) {
-        std::cerr << "Could not save world.\\n";
+        std::cerr << "Could not save world.\n";
         return;
     }
     file.write(reinterpret_cast<const char*>(&header), sizeof(header));
@@ -597,7 +597,7 @@ void saveWorld() {
         file.write(reinterpret_cast<const char*>(state), sizeof(state));
     }
     if (file) std::cout << "World saved: MiniCraft3D.world\\n";
-    else std::cerr << "World save failed.\\n";
+    else std::cerr << "World save failed.\n";
 }
 
 bool loadWorld() {
