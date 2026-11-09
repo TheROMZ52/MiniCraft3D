@@ -430,7 +430,7 @@ float vertexAO(int x, int y, int z, int face, int corner) {
         axisV = {0,1,0};
     }
     const float* p = faceCorners[face][corner];
-    int signU = (face <= 1 || face <= 3) ? (p[axisU.x ? 0 : 2] < 0.0f ? -1 : 1) : 1;
+    int signU = p[axisU.x ? 0 : (axisU.y ? 1 : 2)] < 0.0f ? -1 : 1;
     int signV = p[axisV.y ? 1 : 2] < 0.0f ? -1 : 1;
     glm::ivec3 side1 = normal + axisU * signU;
     glm::ivec3 side2 = normal + axisV * signV;
