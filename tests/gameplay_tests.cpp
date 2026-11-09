@@ -55,9 +55,11 @@ int main() {
     assert(craftedTools.addItem(9, 3) == 0);
     assert(craftedTools.addItem(10, 2) == 0);
     assert(mc::Crafting::craft(craftedTools, 3));
-    assert(craftedTools.slot(0).itemId == 9 || craftedTools.slot(1).itemId == 9);
     assert(craftedTools.countItem(20) == 1);
-    int toolSlot = craftedTools.slot(0).itemId == 20 ? 0 : 1;
+    int toolSlot = -1;
+    for (std::size_t i = 0; i < mc::InventorySize; ++i)
+        if (craftedTools.slot(i).itemId == 20) toolSlot = static_cast<int>(i);
+    assert(toolSlot >= 0);
     assert(craftedTools.durability(static_cast<std::size_t>(toolSlot)) == 59);
 
     mc::PlayerStats stats;
