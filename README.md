@@ -64,7 +64,7 @@ Run `build.bat` from the project directory. Then launch `MiniCraft3D.exe`.
 | F9 | Load world |
 | Esc | Exit |
 
-Mining takes time based on block hardness and the held tool. Pickaxes mine stone and ore efficiently and are required to collect them. Axes are effective on logs; shovels are effective on soil and sand. Every tool has its own durability and breaks when exhausted.
+Mining takes time based on block hardness and the held tool. Pickaxes mine stone and ore efficiently and are required to collect them. Axes are effective on logs and planks; shovels are effective on soil and sand. Every tool has its own durability and breaks when exhausted.
 
 Crafting recipes include planks, sticks, a crafting table, wooden and stone pickaxes, a wooden axe, shovel and sword. Ingredients are consumed only when the output can fit in the inventory.
 
