@@ -14,6 +14,8 @@ A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core
 - Fall damage and automatic respawn
 - Block drops, proximity pickup and inventory-aware placement
 - Inventory, tool durability, health, hunger and drops persist in world saves
+- Pause menu with resume, save and quit actions
+- Settings menu for field of view, mouse sensitivity and debug information
 - Backward-compatible loading of 27.1 and 27.2 world saves
 
 ## World and rendering
@@ -65,7 +67,7 @@ Run `build.bat` from the project directory. Then launch `MiniCraft3D.exe`.
 | C | Craft the first available recipe |
 | F5 | Save world |
 | F9 | Load world |
-| Esc | Exit |
+| Esc | Pause / resume; close inventory or return from settings |
 
 Mining takes time based on block hardness and the held tool. Pickaxes mine stone and ore efficiently and are required to collect them. Axes are effective on logs and planks; shovels are effective on soil and sand. Every tool has its own durability and breaks when exhausted.
 
