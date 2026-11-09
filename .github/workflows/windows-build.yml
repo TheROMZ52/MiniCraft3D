@@ -1,0 +1,33 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-glfw
+            mingw-w64-ucrt-x86_64-glew
+            mingw-w64-ucrt-x86_64-glm
+      - name: Compile
+        run: g++ main.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniCraft3D-27.1-Windows
+          path: MiniCraft3D.exe
