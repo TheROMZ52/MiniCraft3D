@@ -1038,87 +1038,168 @@ glm::vec3 uiColor(int id) {
     }
 }
 
+void drawUiRect(int x, int y, int width, int height, const glm::vec3& color) {
+    if (width <= 0 || height <= 0) return;
+    glScissor(x, y, width, height);
+    glClearColor(color.r, color.g, color.b, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+}
+
+void drawUiDigit(int digit, int x, int y, int scale, const glm::vec3& color) {
+    static const unsigned char glyphs[10][5] = {
+        {7,5,5,5,7},{2,6,2,2,7},{7,1,7,4,7},{7,1,7,1,7},{5,5,7,1,1},
+        {7,4,7,1,7},{7,4,7,5,7},{7,1,1,1,1},{7,5,7,5,7},{7,5,7,1,7}
+    };
+    if (digit < 0 || digit > 9) return;
+    for (int row = 0; row < 5; ++row)
+        for (int column = 0; column < 3; ++column)
+            if (glyphs[digit][row] & (1u << (2 - column)))
+                drawUiRect(x + column * scale, y + (4 - row) * scale, scale, scale, color);
+}
+
+void drawUiNumber(int value, int x, int y, int scale, const glm::vec3& color) {
+    std::string digits = std::to_string(std::max(0, value));
+    if (digits.size() > 3) digits = digits.substr(digits.size() - 3);
+    int width = static_cast<int>(digits.size()) * (4 * scale) - scale;
+    int cursor = x - width;
+    for (char digit : digits) {
+        drawUiDigit(digit - '0', cursor, y, scale, color);
+        cursor += 4 * scale;
+    }
+}
+
+void drawSurvivalIcon(int x, int y, float amount, bool food) {
+    static const char* heart[6] = {
+        "##..##", "######", "######", ".####.", "..##..", "...#.."
+    };
+    static const char* drumstick[6] = {
+        "..###.", ".#####", "..####", ".#####", "#####.", ".###.."
+    };
+    const char** shape = food ? drumstick : heart;
+    const glm::vec3 shadow = food ? glm::vec3(0.20f,0.12f,0.07f) : glm::vec3(0.22f,0.035f,0.045f);
+    const glm::vec3 fill = food ? glm::vec3(0.91f,0.56f,0.16f) : glm::vec3(0.91f,0.16f,0.22f);
+    const glm::vec3 muted = food ? glm::vec3(0.35f,0.25f,0.16f) : glm::vec3(0.34f,0.13f,0.15f);
+    for (int row = 0; row < 6; ++row) {
+        for (int column = 0; column < 6; ++column) {
+            if (shape[row][column] != '#') continue;
+            int px = x + column * 2;
+            int py = y + (5 - row) * 2;
+            drawUiRect(px, py, 2, 2, shadow);
+            float point = static_cast<float>(column) / 6.0f;
+            drawUiRect(px, py + 1, 1, 1, point < amount ? fill : muted);
+        }
+    }
+}
+
+void drawUiItemIcon(int x, int y, int itemId) {
+    glm::vec3 color = uiColor(itemId);
+    drawUiRect(x + 2, y + 1, 22, 22, glm::vec3(0.025f,0.03f,0.04f));
+    drawUiRect(x + 4, y + 3, 18, 18, color);
+    drawUiRect(x + 4, y + 18, 18, 3, color * 0.68f);
+    drawUiRect(x + 5, y + 19, 6, 2, color * 1.18f);
+}
+
 void drawUI() {
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_SCISSOR_TEST);
-    int cx = screenWidth / 2;
-    int cy = screenHeight / 2;
-    glScissor(cx - 1, cy - 9, 2, 18);
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glScissor(cx - 9, cy - 1, 18, 2);
-    glClear(GL_COLOR_BUFFER_BIT);
 
-    const int box = 42;
-    const int gap = 5;
-    const int total = static_cast<int>(HOTBAR_SIZE) * box +
-                      (static_cast<int>(HOTBAR_SIZE) - 1) * gap;
-    const int start = (screenWidth - total) / 2;
-    auto drawSlot = [&](int x, int y, const mc::ItemStack& stack, bool selected, std::size_t slotIndex) {
-        glScissor(x, y, box, box);
-        glClearColor(0.035f, 0.045f, 0.06f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+    const int centerX = screenWidth / 2;
+    const int centerY = screenHeight / 2;
+    const glm::vec3 panel = {0.035f,0.045f,0.065f};
+    const glm::vec3 panelEdge = {0.20f,0.25f,0.31f};
+    const glm::vec3 slotColor = {0.075f,0.09f,0.12f};
+    const glm::vec3 slotInner = {0.12f,0.14f,0.17f};
+    const glm::vec3 white = {0.91f,0.94f,0.96f};
+    const glm::vec3 muted = {0.47f,0.54f,0.62f};
+
+    if (!inventoryOpen) {
+        drawUiRect(centerX - 1, centerY - 10, 3, 21, {0.015f,0.02f,0.025f});
+        drawUiRect(centerX - 10, centerY - 1, 21, 3, {0.015f,0.02f,0.025f});
+        drawUiRect(centerX, centerY - 8, 1, 17, white);
+        drawUiRect(centerX - 8, centerY, 17, 1, white);
+        if (miningProgress > 0.0f) {
+            drawUiRect(centerX - 42, centerY - 24, 84, 5, {0.025f,0.03f,0.04f});
+            drawUiRect(centerX - 41, centerY - 23,
+                       static_cast<int>(82 * std::clamp(miningProgress, 0.0f, 1.0f)), 3,
+                       {0.94f,0.72f,0.20f});
+        }
+    }
+
+    const int hotbarBox = 48;
+    const int hotbarGap = 4;
+    const int hotbarTotal = HOTBAR_SIZE * hotbarBox + (HOTBAR_SIZE - 1) * hotbarGap;
+    const int hotbarStart = (screenWidth - hotbarTotal) / 2;
+    const int hotbarY = 18;
+    drawUiRect(hotbarStart - 7, hotbarY - 7, hotbarTotal + 14, hotbarBox + 14, panelEdge);
+    drawUiRect(hotbarStart - 5, hotbarY - 5, hotbarTotal + 10, hotbarBox + 10, panel);
+
+    auto drawSlot = [&](int x, int y, int box, const mc::ItemStack& stack,
+                        bool selected, std::size_t slotIndex, int hotbarNumber) {
+        drawUiRect(x, y, box, box, selected ? glm::vec3(0.96f,0.76f,0.25f) : panelEdge);
+        drawUiRect(x + 2, y + 2, box - 4, box - 4, selected ? glm::vec3(0.25f,0.20f,0.10f) : slotColor);
+        drawUiRect(x + 4, y + 4, box - 8, box - 8, slotInner);
+        if (hotbarNumber > 0)
+            drawUiDigit(hotbarNumber, x + 5, y + box - 11, 1, muted);
         if (stack.itemId > 0 && stack.count > 0) {
-            glm::vec3 color = uiColor(stack.itemId);
-            glScissor(x + 5, y + 5, box - 10, box - 10);
-            glClearColor(color.r, color.g, color.b, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
+            int iconSize = box >= 46 ? 26 : 22;
+            drawUiItemIcon(x + (box - iconSize) / 2, y + (box - iconSize) / 2 + 1, stack.itemId);
+            drawUiNumber(stack.count, x + box - 4, y + 4, 1, white);
             int maximum = mc::Items::maxDurability(stack.itemId);
             if (maximum > 0) {
                 float ratio = static_cast<float>(inventory.durability(slotIndex)) / maximum;
                 int barWidth = static_cast<int>((box - 10) * std::clamp(ratio, 0.0f, 1.0f));
-                glScissor(x + 5, y + 3, box - 10, 3);
-                glClearColor(0.12f, 0.08f, 0.06f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT);
-                glScissor(x + 5, y + 3, barWidth, 3);
-                glClearColor(ratio > 0.5f ? 0.25f : (ratio > 0.2f ? 0.9f : 0.9f),
-                             ratio > 0.5f ? 0.8f : (ratio > 0.2f ? 0.65f : 0.2f), 0.18f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT);
+                drawUiRect(x + 5, y + 3, box - 10, 3, {0.025f,0.025f,0.03f});
+                glm::vec3 durabilityColor = ratio > 0.5f ? glm::vec3(0.25f,0.82f,0.34f) :
+                    (ratio > 0.2f ? glm::vec3(0.91f,0.68f,0.18f) : glm::vec3(0.90f,0.22f,0.18f));
+                drawUiRect(x + 5, y + 3, barWidth, 3, durabilityColor);
             }
-        }
-        if (selected) {
-            glScissor(x - 2, y - 2, box + 4, 2);
-            glClearColor(1.0f, 0.83f, 0.2f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-            glScissor(x - 2, y + box, box + 4, 2);
-            glClear(GL_COLOR_BUFFER_BIT);
         }
     };
 
     if (inventoryOpen) {
+        const int box = 42;
+        const int gap = 5;
+        const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+        const int start = (screenWidth - total) / 2;
+        drawUiRect(start - 11, 68, total + 22, 160, panelEdge);
+        drawUiRect(start - 9, 70, total + 18, 156, panel);
+        drawUiRect(start - 2, 218, total + 4, 2, {0.30f,0.38f,0.46f});
         for (int row = 0; row < 3; ++row) {
             for (int column = 0; column < 8; ++column) {
                 int index = 8 + row * 8 + column;
                 int x = start + column * (box + gap);
                 int y = 18 + (3 - row) * (box + gap) + 12;
-                drawSlot(x, y, inventory.slot(static_cast<std::size_t>(index)), false, static_cast<std::size_t>(index));
+                drawSlot(x, y, box, inventory.slot(static_cast<std::size_t>(index)),
+                         false, static_cast<std::size_t>(index), 0);
             }
         }
     }
 
     for (int i = 0; i < HOTBAR_SIZE; ++i) {
-        int x = start + i * (box + gap);
-        drawSlot(x, 18, inventory.slot(static_cast<std::size_t>(i)), i + 1 == selectedBlock, static_cast<std::size_t>(i));
+        int x = hotbarStart + i * (hotbarBox + hotbarGap);
+        drawSlot(x, hotbarY, hotbarBox, inventory.slot(static_cast<std::size_t>(i)),
+                 i + 1 == selectedBlock, static_cast<std::size_t>(i), i + 1);
     }
 
-    auto drawStatusBar = [&](int x, int y, float value, const glm::vec3& color) {
-        const int width = 150;
-        const int height = 9;
-        glScissor(x, y, width, height);
-        glClearColor(0.04f, 0.04f, 0.05f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glScissor(x, y, static_cast<int>(width * std::clamp(value / 20.0f, 0.0f, 1.0f)), height);
-        glClearColor(color.r, color.g, color.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-    };
-    drawStatusBar(18, screenHeight - 24, playerStats.health(), {0.82f, 0.12f, 0.16f});
-    drawStatusBar(18, screenHeight - 40, playerStats.hunger(), {0.92f, 0.58f, 0.12f});
+    const int iconY = hotbarY + hotbarBox + 13;
+    const int iconStart = centerX - 190;
+    for (int i = 0; i < 10; ++i) {
+        float healthPart = std::clamp((playerStats.health() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
+        float hungerPart = std::clamp((playerStats.hunger() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
+        drawSurvivalIcon(iconStart + i * 18, iconY, healthPart, false);
+        drawSurvivalIcon(centerX + 10 + i * 18, iconY, hungerPart, true);
+    }
+
+    if (inventoryOpen) {
+        drawUiRect(centerX - 54, screenHeight - 48, 108, 3, {0.85f,0.67f,0.22f});
+        drawUiRect(centerX - 53, screenHeight - 47, 106, 1, {0.28f,0.34f,0.40f});
+    }
+
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
 }
-
 std::string inventorySummary() {
     std::string summary;
     for (std::size_t i = 0; i < mc::InventorySize; ++i) {
@@ -1145,7 +1226,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.3", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.4", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -1231,7 +1312,7 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 27.3 | " + std::to_string(static_cast<int>(fps)) +
+            std::string title = "MiniCraft3D 27.4 | " + std::to_string(static_cast<int>(fps)) +
                 " FPS | Chunks " + std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
                 " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
                 std::to_string(static_cast<int>(player.y)) + "," +
