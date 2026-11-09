@@ -1,4 +1,4 @@
-# MiniCraft3D 27.3
+# MiniCraft3D 27.4
 
 A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core. No game engine.
 
@@ -26,7 +26,10 @@ A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core
 - Underground caves and small ore deposits
 - First-person movement, collision, jumping and sprinting
 - Animated daylight, sky tint and distance fog
-- Health and hunger bars; tool durability bars in inventory slots
+- Pixel-art heart and hunger HUD with half-unit states
+- Redesigned hotbar with selected-slot highlight, item counts and durability meters
+- Inventory panel with a consistent dark block-style visual system
+- Custom crosshair and mining progress indicator
 
 ## Requirements
 
@@ -68,7 +71,7 @@ Mining takes time based on block hardness and the held tool. Pickaxes mine stone
 
 Crafting recipes include planks, sticks, a crafting table, wooden and stone pickaxes, a wooden axe, shovel and sword. Ingredients are consumed only when the output can fit in the inventory.
 
-Health and hunger are shown at the top-left of the screen. Sprinting consumes hunger faster; high hunger enables natural regeneration, while starvation causes damage. Hard falls cause damage. At zero health the player respawns with full health and reduced hunger.
+Health and hunger use pixel-art icons above the hotbar. Sprinting consumes hunger faster; high hunger enables natural regeneration, while starvation causes damage. Hard falls cause damage. At zero health the player respawns with full health and reduced hunger.
 
 Worlds are saved to `MiniCraft3D.world` on exit. Existing 27.1 and 27.2 saves remain loadable and are upgraded to the 27.3 format on the next save.
 
