@@ -1,6 +1,7 @@
 #include "../src/gameplay/gameplay.hpp"
 
 #include <cassert>
+#include <cmath>
 
 int main() {
     mc::Inventory inventory;
@@ -20,7 +21,7 @@ int main() {
     assert(mc::Crafting::craft(inventory, 1));
     assert(inventory.countItem(9) == 2);
     assert(inventory.countItem(10) == 4);
-    assert(mc::Crafting::craft(inventory, 2) == false);
+    assert(!mc::Crafting::craft(inventory, 2));
     assert(inventory.countItem(9) == 2);
     assert(inventory.addItem(9, 2) == 0);
     assert(mc::Crafting::craft(inventory, 2));
@@ -32,5 +33,44 @@ int main() {
     assert(!mc::Crafting::craft(full, 0));
     assert(full.countItem(4) == 1);
     assert(full.countItem(9) == 0);
+
+    mc::Inventory tools;
+    assert(tools.addItem(20, 1) == 0);
+    assert(tools.durability(0) == 59);
+    assert(tools.addItem(20, 1) == 0);
+    assert(tools.slot(1).count == 1);
+    assert(tools.damageItem(0, 58) == false);
+    assert(tools.durability(0) == 1);
+    assert(tools.damageItem(0, 1));
+    assert(tools.slot(0).itemId == 0);
+    assert(tools.durability(0) == 0);
+    assert(mc::Items::canHarvest(21, 3));
+    assert(!mc::Items::canHarvest(20, 3));
+    assert(mc::Items::miningEfficiency(21, 3) > mc::Items::miningEfficiency(20, 3));
+    tools.swapSlots(0, 1);
+    assert(tools.slot(0).itemId == 20);
+    assert(tools.durability(0) == 59);
+
+    mc::Inventory craftedTools;
+    assert(craftedTools.addItem(9, 3) == 0);
+    assert(craftedTools.addItem(10, 2) == 0);
+    assert(mc::Crafting::craft(craftedTools, 3));
+    assert(craftedTools.slot(0).itemId == 9 || craftedTools.slot(1).itemId == 9);
+    assert(craftedTools.countItem(20) == 1);
+    int toolSlot = craftedTools.slot(0).itemId == 20 ? 0 : 1;
+    assert(craftedTools.durability(static_cast<std::size_t>(toolSlot)) == 59);
+
+    mc::PlayerStats stats;
+    stats.damage(6.0f);
+    assert(stats.health() == 14.0f);
+    stats.set(14.0f, 20.0f);
+    stats.tick(4.1f, false, false);
+    assert(stats.health() == 15.0f);
+    assert(stats.hunger() < 20.0f);
+    stats.set(20.0f, 0.0f);
+    stats.tick(4.1f, false, false);
+    assert(stats.health() == 19.0f);
+    stats.damage(100.0f);
+    assert(!stats.alive());
     return 0;
 }
