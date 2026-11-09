@@ -48,6 +48,9 @@ int main() {
     assert(mc::Items::canHarvest(21, 3));
     assert(!mc::Items::canHarvest(20, 8));
     assert(mc::Items::canHarvest(21, 8));
+    assert(mc::Items::canHarvest(22, 9));
+    assert(mc::Items::canHarvest(23, 6));
+    assert(!mc::Items::canHarvest(23, 9));
     assert(mc::Items::miningEfficiency(21, 3) > mc::Items::miningEfficiency(20, 3));
     tools.swapSlots(0, 1);
     assert(tools.slot(0).itemId == 20);
