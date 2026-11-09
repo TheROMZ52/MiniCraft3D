@@ -147,6 +147,7 @@ glm::vec3 baseColor(int tile) {
         case 4: return {0.13f,0.42f,0.12f};
         case 5: return {0.78f,0.69f,0.43f};
         case 6: return {0.55f,0.20f,0.16f};
+        case 8: return {0.39f,0.25f,0.12f};
         default: return {0.76f,0.55f,0.18f};
     }
 }
