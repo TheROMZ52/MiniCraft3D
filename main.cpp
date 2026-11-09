@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -152,7 +153,7 @@ glm::vec3 baseColor(int tile) {
 
 void createAtlas() {
     constexpr int tileSize = 16;
-    constexpr int columns = 8;
+    constexpr int columns = 9;
     std::vector<unsigned char> pixels(tileSize * columns * tileSize * 4);
     for (int tile = 0; tile < columns; ++tile) {
         glm::vec3 base = baseColor(tile);
@@ -164,6 +165,7 @@ void createAtlas() {
                 if (tile == 7 && ((x * 5 + y * 3) % 11 < 2)) variation *= 0.42f;
                 if (tile == 3 && (x == 3 || x == 11 || y == 7)) variation *= 0.62f;
                 if (tile == 6 && (y == 5 || y == 11)) variation *= 0.68f;
+                if (tile == 8 && y < 4) base = {0.28f,0.68f,0.17f};
                 int px = tile * tileSize + x;
                 int index = (y * tileSize * columns + px) * 4;
                 pixels[index + 0] = static_cast<unsigned char>(std::clamp(base.r * variation, 0.0f, 1.0f) * 255);
@@ -343,7 +345,7 @@ bool raycast(glm::ivec3& hit, glm::ivec3& previous) {
 }
 
 int tileForBlock(int id, int face) {
-    if (id == 1) return face == 2 ? 0 : (face == 3 ? 1 : 0);
+    if (id == 1) return face == 2 ? 0 : (face == 3 ? 1 : 8);
     if (id == 2) return 1;
     if (id == 3) return 2;
     if (id == 4) return (face == 2 || face == 3) ? 3 : 3;
@@ -356,7 +358,7 @@ int tileForBlock(int id, int face) {
 
 void addFace(std::vector<Vertex>& vertices, int x, int y, int z, int id, int face) {
     int tile = tileForBlock(id, face);
-    constexpr float atlasWidth = 128.0f;
+    constexpr float atlasWidth = 144.0f;
     constexpr float tileSize = 16.0f;
     float u0 = (tile * tileSize + 0.5f) / atlasWidth;
     float u1 = ((tile + 1) * tileSize - 0.5f) / atlasWidth;
@@ -516,6 +518,7 @@ void setCommonUniforms(const glm::mat4& view, const glm::mat4& projection, const
 void renderWorld(const glm::mat4& view, const glm::mat4& projection, const glm::vec3& camera, const glm::vec3& fog) {
     setCommonUniforms(view, projection, camera, fog);
     glUniform1i(glGetUniformLocation(shaderProgram, "uTextured"), 1);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uModel"), 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, atlasTexture);
     glBindVertexArray(worldVAO);
@@ -646,7 +649,7 @@ int main() {
         double now = glfwGetTime();
         float dt = static_cast<float>(std::min(now - lastFrame, 0.05));
         lastFrame = now;
-        worldTime += dt * 60.0f;
+        worldTime += dt;
 
         processInput(window, dt);
         processBlocks(window);
