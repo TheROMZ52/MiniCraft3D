@@ -8,8 +8,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -17,8 +19,11 @@
 constexpr int WORLD_X = 64;
 constexpr int WORLD_Y = 32;
 constexpr int WORLD_Z = 64;
+constexpr int CHUNK_SIZE = 16;
+constexpr int CHUNKS_X = WORLD_X / CHUNK_SIZE;
+constexpr int CHUNKS_Z = WORLD_Z / CHUNK_SIZE;
+constexpr int CHUNK_COUNT = CHUNKS_X * CHUNKS_Z;
 constexpr int HOTBAR_SIZE = 8;
-constexpr float PI = 3.1415926535f;
 
 int world[WORLD_X][WORLD_Y][WORLD_Z]{};
 glm::vec3 player(32.0f, 12.0f, 32.0f);
@@ -31,35 +36,59 @@ bool firstMouse = true;
 bool grounded = false;
 bool leftWasDown = false;
 bool rightWasDown = false;
+bool saveWasDown = false;
+bool loadWasDown = false;
 int selectedBlock = 1;
 int screenWidth = 1280;
 int screenHeight = 720;
 float worldTime = 0.0f;
 
-GLuint worldVAO = 0;
-GLuint worldVBO = 0;
-GLuint cubeVAO = 0;
-GLuint cubeVBO = 0;
-GLuint lineVAO = 0;
-GLuint lineVBO = 0;
-GLuint shaderProgram = 0;
-GLuint atlasTexture = 0;
-GLsizei worldVertexCount = 0;
-
 struct Vertex {
     float x, y, z;
     float nx, ny, nz;
     float u, v;
+    float ao;
 };
+
+struct ChunkMesh {
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    GLsizei vertexCount = 0;
+    bool dirty = true;
+};
+
+struct Plane {
+    glm::vec3 normal;
+    float distance;
+};
+
+std::array<ChunkMesh, CHUNK_COUNT> chunks;
+GLuint cubeVAO = 0;
+GLuint cubeVBO = 0;
+GLuint shaderProgram = 0;
+GLuint atlasTexture = 0;
+GLint locView = -1;
+GLint locProjection = -1;
+GLint locModel = -1;
+GLint locCamera = -1;
+GLint locSun = -1;
+GLint locFog = -1;
+GLint locFogDensity = -1;
+GLint locTime = -1;
+GLint locTextured = -1;
+GLint locSolidColor = -1;
+GLint locAtlas = -1;
 
 const char* vertexShaderSource = R"(
 #version 330 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec2 aUV;
+layout(location=3) in float aAO;
 out vec3 vNormal;
 out vec3 vWorldPos;
 out vec2 vUV;
+out float vAO;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform mat4 uModel;
@@ -68,6 +97,7 @@ void main() {
     vWorldPos = worldPos.xyz;
     vNormal = mat3(transpose(inverse(uModel))) * aNormal;
     vUV = aUV;
+    vAO = aAO;
     gl_Position = uProjection * uView * worldPos;
 }
 )";
@@ -77,6 +107,7 @@ const char* fragmentShaderSource = R"(
 in vec3 vNormal;
 in vec3 vWorldPos;
 in vec2 vUV;
+in float vAO;
 out vec4 FragColor;
 uniform sampler2D uAtlas;
 uniform vec3 uCameraPos;
@@ -94,12 +125,13 @@ void main() {
     vec4 texel = texture(uAtlas, vUV);
     vec3 n = normalize(vNormal);
     float diffuse = max(dot(n, normalize(uSunDirection)), 0.0);
-    float ambient = 0.34 + 0.08 * max(n.y, 0.0);
-    float daylight = 0.72 + 0.28 * sin(uTime * 0.035);
-    vec3 lit = texel.rgb * (ambient + diffuse * 0.72) * daylight;
+    float ambient = 0.36 + 0.08 * max(n.y, 0.0);
+    float daylight = 0.76 + 0.24 * sin(uTime * 0.04);
+    float occlusion = mix(0.58, 1.0, clamp(vAO, 0.0, 1.0));
+    vec3 lit = texel.rgb * (ambient + diffuse * 0.68) * daylight * occlusion;
     float distanceToCamera = length(vWorldPos - uCameraPos);
     float fog = 1.0 - exp(-pow(distanceToCamera * uFogDensity, 1.45));
-    fog = clamp(fog, 0.0, 0.88);
+    fog = clamp(fog, 0.0, 0.9);
     FragColor = vec4(mix(lit, uFogColor, fog), 1.0);
 }
 )";
@@ -125,15 +157,17 @@ const float faceCorners[6][4][3] = {
     {{-0.5f,0.5f,0.5f},{0.5f,0.5f,0.5f},{0.5f,0.5f,-0.5f},{-0.5f,0.5f,-0.5f}},
     {{-0.5f,-0.5f,-0.5f},{0.5f,-0.5f,-0.5f},{0.5f,-0.5f,0.5f},{-0.5f,-0.5f,0.5f}},
     {{0.5f,-0.5f,0.5f},{0.5f,-0.5f,-0.5f},{0.5f,0.5f,-0.5f},{0.5f,0.5f,0.5f}},
-    {{-0.5f,-0.5f,-0.5f},{-0.5f,-0.5f,0.5f},{-0.5f,0.5f,0.5f},{-0.5f,0.5f,-0.5f}}
+    {{-0.5f,-0.5f,-0.5f},{-0.5f,0.5f,-0.5f},{-0.5f,0.5f,0.5f},{-0.5f,-0.5f,0.5f}}
 };
 
-const glm::vec3 faceNormals[6] = {
+const glm::ivec3 faceNormals[6] = {
     {0,0,1},{0,0,-1},{0,1,0},{0,-1,0},{1,0,0},{-1,0,0}
 };
 
 uint32_t hashNoise(int x, int y, int seed) {
-    uint32_t n = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 1442695041u;
+    uint32_t n = static_cast<uint32_t>(x) * 374761393u +
+                 static_cast<uint32_t>(y) * 668265263u +
+                 static_cast<uint32_t>(seed) * 1442695041u;
     n = (n ^ (n >> 13)) * 1274126177u;
     return n ^ (n >> 16);
 }
@@ -146,9 +180,9 @@ glm::vec3 baseColor(int tile) {
         case 3: return {0.48f,0.27f,0.11f};
         case 4: return {0.13f,0.42f,0.12f};
         case 5: return {0.78f,0.69f,0.43f};
-        case 6: return {0.55f,0.20f,0.16f};
-        case 8: return {0.39f,0.25f,0.12f};
-        default: return {0.76f,0.55f,0.18f};
+        case 6: return {0.88f,0.91f,0.96f};
+        case 7: return {0.72f,0.48f,0.16f};
+        default: return {0.28f,0.68f,0.17f};
     }
 }
 
@@ -165,7 +199,7 @@ void createAtlas() {
                 if (tile == 4 && ((x + y * 3) % 7 == 0)) variation *= 0.48f;
                 if (tile == 7 && ((x * 5 + y * 3) % 11 < 2)) variation *= 0.42f;
                 if (tile == 3 && (x == 3 || x == 11 || y == 7)) variation *= 0.62f;
-                if (tile == 6 && (y == 5 || y == 11)) variation *= 0.68f;
+                if (tile == 6 && (y == 5 || y == 11)) variation *= 0.9f;
                 if (tile == 8 && y < 4) base = {0.28f,0.68f,0.17f};
                 int px = tile * tileSize + x;
                 int index = (y * tileSize * columns + px) * 4;
@@ -215,12 +249,33 @@ void createShader() {
     }
     glDeleteShader(vertex);
     glDeleteShader(fragment);
+
+    locView = glGetUniformLocation(shaderProgram, "uView");
+    locProjection = glGetUniformLocation(shaderProgram, "uProjection");
+    locModel = glGetUniformLocation(shaderProgram, "uModel");
+    locCamera = glGetUniformLocation(shaderProgram, "uCameraPos");
+    locSun = glGetUniformLocation(shaderProgram, "uSunDirection");
+    locFog = glGetUniformLocation(shaderProgram, "uFogColor");
+    locFogDensity = glGetUniformLocation(shaderProgram, "uFogDensity");
+    locTime = glGetUniformLocation(shaderProgram, "uTime");
+    locTextured = glGetUniformLocation(shaderProgram, "uTextured");
+    locSolidColor = glGetUniformLocation(shaderProgram, "uSolidColor");
+    locAtlas = glGetUniformLocation(shaderProgram, "uAtlas");
+}
+
+int biomeAt(int x, int z) {
+    float temperature = std::sin(x * 0.052f) + std::cos(z * 0.047f);
+    float moisture = std::sin((x + z) * 0.061f) + std::cos((x - z) * 0.039f);
+    if (temperature > 0.62f && moisture < -0.05f) return 1;
+    if (temperature < -0.55f) return 2;
+    if (moisture > 0.35f) return 3;
+    return 0;
 }
 
 int terrainHeight(int x, int z) {
     float broad = std::sin(x * 0.105f) * 2.8f + std::cos(z * 0.12f) * 2.4f;
     float detail = std::sin((x + z) * 0.23f) * 1.15f + std::cos((x - z) * 0.19f) * 0.8f;
-    return std::clamp(7 + static_cast<int>(std::round(broad + detail)), 3, 15);
+    return std::clamp(7 + static_cast<int>(std::round(broad + detail)), 3, 17);
 }
 
 bool insideWorld(int x, int y, int z) {
@@ -231,28 +286,41 @@ void generateWorld() {
     for (int x = 0; x < WORLD_X; ++x) {
         for (int z = 0; z < WORLD_Z; ++z) {
             int top = terrainHeight(x, z);
+            int biome = biomeAt(x, z);
             for (int y = 0; y <= top; ++y) {
-                if (y == top) world[x][y][z] = 1;
-                else if (y >= top - 3) world[x][y][z] = 2;
-                else world[x][y][z] = 3;
+                if (y == top) {
+                    if (biome == 1) world[x][y][z] = 6;
+                    else if (biome == 2) world[x][y][z] = 7;
+                    else world[x][y][z] = 1;
+                } else if (y >= top - 3) {
+                    world[x][y][z] = biome == 1 ? 6 : 2;
+                } else {
+                    float caveA = std::sin(x * 0.23f + y * 0.37f) * std::cos(z * 0.19f - y * 0.28f);
+                    float caveB = std::sin((x + z) * 0.12f + y * 0.31f);
+                    bool cave = y > 3 && y < top - 3 && caveA + caveB > 0.98f;
+                    if (cave) world[x][y][z] = 0;
+                    else if (y < top - 5 && hashNoise(x * 3 + z, y * 7, 413) % 181 == 0) world[x][y][z] = 8;
+                    else world[x][y][z] = 3;
+                }
             }
-            if (top <= 5) world[x][top][z] = 6;
         }
     }
 
-    for (int x = 5; x < WORLD_X - 5; x += 9) {
-        for (int z = 5; z < WORLD_Z - 5; z += 11) {
-            if (hashNoise(x, z, 77) % 4 == 0) continue;
+    for (int x = 5; x < WORLD_X - 5; x += 5) {
+        for (int z = 5; z < WORLD_Z - 5; z += 6) {
+            int biome = biomeAt(x, z);
+            uint32_t roll = hashNoise(x, z, 77) % 100;
+            if (biome == 1 || roll > (biome == 3 ? 62u : 30u)) continue;
             int ground = terrainHeight(x, z);
-            if (world[x][ground][z] == 6) continue;
-            for (int y = 1; y <= 4; ++y)
-                if (insideWorld(x, ground + y, z)) world[x][ground + y][z] = 4;
+            if (world[x][ground][z] != 1 || ground + 6 >= WORLD_Y) continue;
+            int trunk = biome == 3 ? 4 : 3;
+            for (int y = 1; y <= trunk; ++y) world[x][ground + y][z] = 4;
             for (int dx = -2; dx <= 2; ++dx) {
                 for (int dz = -2; dz <= 2; ++dz) {
-                    for (int dy = 2; dy <= 5; ++dy) {
+                    for (int dy = trunk - 1; dy <= trunk + 2; ++dy) {
                         int xx = x + dx, yy = ground + dy, zz = z + dz;
-                        if (insideWorld(xx, yy, zz) &&
-                            std::abs(dx) + std::abs(dz) + std::abs(dy - 3) <= 5 &&
+                        if (!insideWorld(xx, yy, zz)) continue;
+                        if (std::abs(dx) + std::abs(dz) + std::abs(dy - (trunk + 1)) <= 4 &&
                             world[xx][yy][zz] == 0) world[xx][yy][zz] = 5;
                     }
                 }
@@ -260,17 +328,8 @@ void generateWorld() {
         }
     }
 
-    for (int x = 0; x < WORLD_X; ++x) {
-        for (int z = 0; z < WORLD_Z; ++z) {
-            int top = terrainHeight(x, z);
-            if (hashNoise(x, z, 123) % 29 == 0 && world[x][top][z] == 1 && top + 1 < WORLD_Y)
-                world[x][top + 1][z] = 7;
-            if (hashNoise(x, z, 991) % 97 == 0 && world[x][top][z] == 1 && top + 1 < WORLD_Y)
-                world[x][top + 1][z] = 8;
-        }
-    }
-
     player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
+    velocity = glm::vec3(0.0f);
 }
 
 bool solidAt(int x, int y, int z) {
@@ -349,7 +408,7 @@ int tileForBlock(int id, int face) {
     if (id == 1) return face == 2 ? 0 : (face == 3 ? 1 : 8);
     if (id == 2) return 1;
     if (id == 3) return 2;
-    if (id == 4) return (face == 2 || face == 3) ? 3 : 3;
+    if (id == 4) return 3;
     if (id == 5) return 4;
     if (id == 6) return 5;
     if (id == 7) return 6;
@@ -357,10 +416,37 @@ int tileForBlock(int id, int face) {
     return 2;
 }
 
-void addFace(std::vector<Vertex>& vertices, int x, int y, int z, int id, int face) {
-    int tile = tileForBlock(id, face);
+float vertexAO(int x, int y, int z, int face, int corner) {
+    glm::ivec3 normal = faceNormals[face];
+    glm::ivec3 axisU, axisV;
+    if (face <= 1) {
+        axisU = {1,0,0};
+        axisV = {0,1,0};
+    } else if (face <= 3) {
+        axisU = {1,0,0};
+        axisV = {0,0,1};
+    } else {
+        axisU = {0,0,1};
+        axisV = {0,1,0};
+    }
+    const float* p = faceCorners[face][corner];
+    int signU = (face <= 1 || face <= 3) ? (p[axisU.x ? 0 : 2] < 0.0f ? -1 : 1) : 1;
+    int signV = p[axisV.y ? 1 : 2] < 0.0f ? -1 : 1;
+    glm::ivec3 side1 = normal + axisU * signU;
+    glm::ivec3 side2 = normal + axisV * signV;
+    glm::ivec3 diagonal = normal + axisU * signU + axisV * signV;
+    bool a = solidAt(x + side1.x, y + side1.y, z + side1.z);
+    bool b = solidAt(x + side2.x, y + side2.y, z + side2.z);
+    bool c = solidAt(x + diagonal.x, y + diagonal.y, z + diagonal.z);
+    int level = (a && b) ? 0 : 3 - (static_cast<int>(a) + static_cast<int>(b) + static_cast<int>(c));
+    return 0.48f + 0.173333f * static_cast<float>(level);
+}
+
+void addFace(std::vector<Vertex>& vertices, int localX, int y, int localZ,
+             int worldX, int worldZ, int id, int face) {
     constexpr float atlasWidth = 144.0f;
     constexpr float tileSize = 16.0f;
+    int tile = tileForBlock(id, face);
     float u0 = (tile * tileSize + 0.5f) / atlasWidth;
     float u1 = ((tile + 1) * tileSize - 0.5f) / atlasWidth;
     float v0 = 0.5f / tileSize;
@@ -369,54 +455,84 @@ void addFace(std::vector<Vertex>& vertices, int x, int y, int z, int id, int fac
     const int order[6] = {0,1,2,0,2,3};
     for (int i : order) {
         const float* p = faceCorners[face][i];
-        const glm::vec3 n = faceNormals[face];
+        const glm::vec3 n(faceNormals[face]);
+        float ao = vertexAO(worldX, y, worldZ, face, i);
         vertices.push_back({
-            x + p[0], y + p[1], z + p[2],
+            localX + p[0], y + p[1], localZ + p[2],
             n.x, n.y, n.z,
-            uv[i][0], uv[i][1]
+            uv[i][0], uv[i][1], ao
         });
     }
 }
 
-void rebuildWorldMesh() {
+int chunkIndex(int cx, int cz) {
+    return cz * CHUNKS_X + cx;
+}
+
+void markChunkDirty(int x, int z) {
+    int cx = x / CHUNK_SIZE;
+    int cz = z / CHUNK_SIZE;
+    chunks[chunkIndex(cx, cz)].dirty = true;
+    if (x % CHUNK_SIZE == 0 && cx > 0) chunks[chunkIndex(cx - 1, cz)].dirty = true;
+    if (x % CHUNK_SIZE == CHUNK_SIZE - 1 && cx + 1 < CHUNKS_X) chunks[chunkIndex(cx + 1, cz)].dirty = true;
+    if (z % CHUNK_SIZE == 0 && cz > 0) chunks[chunkIndex(cx, cz - 1)].dirty = true;
+    if (z % CHUNK_SIZE == CHUNK_SIZE - 1 && cz + 1 < CHUNKS_Z) chunks[chunkIndex(cx, cz + 1)].dirty = true;
+}
+
+void rebuildChunk(int cx, int cz) {
+    ChunkMesh& chunk = chunks[chunkIndex(cx, cz)];
     std::vector<Vertex> vertices;
-    vertices.reserve(180000);
+    vertices.reserve(24000);
+    int originX = cx * CHUNK_SIZE;
+    int originZ = cz * CHUNK_SIZE;
     const int neighbor[6][3] = {{0,0,1},{0,0,-1},{0,1,0},{0,-1,0},{1,0,0},{-1,0,0}};
-    for (int x = 0; x < WORLD_X; ++x) {
+
+    for (int x = originX; x < originX + CHUNK_SIZE; ++x) {
         for (int y = 0; y < WORLD_Y; ++y) {
-            for (int z = 0; z < WORLD_Z; ++z) {
+            for (int z = originZ; z < originZ + CHUNK_SIZE; ++z) {
                 int id = world[x][y][z];
                 if (!id) continue;
                 for (int face = 0; face < 6; ++face) {
                     int nx = x + neighbor[face][0];
                     int ny = y + neighbor[face][1];
                     int nz = z + neighbor[face][2];
-                    if (!solidAt(nx, ny, nz)) addFace(vertices, x, y, z, id, face);
+                    if (!solidAt(nx, ny, nz))
+                        addFace(vertices, x - originX, y, z - originZ, x, z, id, face);
                 }
             }
         }
     }
-    glBindBuffer(GL_ARRAY_BUFFER, worldVBO);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)), vertices.data(), GL_STATIC_DRAW);
-    worldVertexCount = static_cast<GLsizei>(vertices.size());
+
+    glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
+        vertices.empty() ? nullptr : vertices.data(), GL_DYNAMIC_DRAW);
+    chunk.vertexCount = static_cast<GLsizei>(vertices.size());
+    chunk.dirty = false;
 }
 
-void setupVertexLayout(GLuint vao, GLuint vbo, const void* data, GLsizeiptr size, GLenum usage) {
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, size, data, usage);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, x)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, nx)));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, u)));
+void rebuildDirtyChunks() {
+    for (int cz = 0; cz < CHUNKS_Z; ++cz)
+        for (int cx = 0; cx < CHUNKS_X; ++cx)
+            if (chunks[chunkIndex(cx, cz)].dirty) rebuildChunk(cx, cz);
 }
 
-void createGeometry() {
-    glGenVertexArrays(1, &worldVAO);
-    glGenBuffers(1, &worldVBO);
-    setupVertexLayout(worldVAO, worldVBO, nullptr, 0, GL_DYNAMIC_DRAW);
+void setupGeometry() {
+    for (ChunkMesh& chunk : chunks) {
+        glGenVertexArrays(1, &chunk.vao);
+        glGenBuffers(1, &chunk.vbo);
+        glBindVertexArray(chunk.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, x)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, nx)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, u)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, ao)));
+    }
 
     glGenVertexArrays(1, &cubeVAO);
     glGenBuffers(1, &cubeVBO);
@@ -425,23 +541,71 @@ void createGeometry() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(cubeVertices), cubeVertices, GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+}
 
-    glGenVertexArrays(1, &lineVAO);
-    glGenBuffers(1, &lineVBO);
-    glBindVertexArray(lineVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
-    glBufferData(GL_ARRAY_BUFFER, 24 * 3 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+void saveWorld() {
+    struct Header {
+        char magic[8];
+        uint32_t width;
+        uint32_t height;
+        uint32_t depth;
+    };
+    Header header{{'M','C','3','D','2','7','1','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
+    float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
+    std::ofstream file("MiniCraft3D.world", std::ios::binary | std::ios::trunc);
+    if (!file) {
+        std::cerr << "Could not save world.\n";
+        return;
+    }
+    file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    file.write(reinterpret_cast<const char*>(world), sizeof(world));
+    file.write(reinterpret_cast<const char*>(playerData), sizeof(playerData));
+    if (file) std::cout << "World saved: MiniCraft3D.world\n";
+    else std::cerr << "World save failed.\n";
+}
+
+bool loadWorld() {
+    struct Header {
+        char magic[8];
+        uint32_t width;
+        uint32_t height;
+        uint32_t depth;
+    };
+    std::ifstream file("MiniCraft3D.world", std::ios::binary);
+    if (!file) return false;
+    Header header{};
+    int loaded[WORLD_X][WORLD_Y][WORLD_Z]{};
+    float playerData[5]{};
+    file.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (!file || std::memcmp(header.magic, "MC3D271", 7) != 0 ||
+        header.width != WORLD_X || header.height != WORLD_Y || header.depth != WORLD_Z)
+        return false;
+    file.read(reinterpret_cast<char*>(loaded), sizeof(loaded));
+    file.read(reinterpret_cast<char*>(playerData), sizeof(playerData));
+    if (!file) return false;
+    std::memcpy(world, loaded, sizeof(world));
+    player = glm::vec3(playerData[0], playerData[1], playerData[2]);
+    yaw = playerData[3];
+    pitch = std::clamp(playerData[4], -89.0f, 89.0f);
+    velocity = glm::vec3(0.0f);
+    return true;
 }
 
 void processInput(GLFWwindow* window, float dt) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
-    }
     for (int i = 0; i < HOTBAR_SIZE; ++i)
         if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) selectedBlock = i + 1;
+
+    bool saveDown = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
+    bool loadDown = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
+    if (saveDown && !saveWasDown) saveWorld();
+    if (loadDown && !loadWasDown && loadWorld()) {
+        for (ChunkMesh& chunk : chunks) chunk.dirty = true;
+        std::cout << "World loaded.\n";
+    }
+    saveWasDown = saveDown;
+    loadWasDown = loadDown;
 
     glm::vec3 front = cameraFront();
     glm::vec3 forward = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
@@ -488,52 +652,107 @@ void processBlocks(GLFWwindow* window) {
     bool right = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     bool changed = false;
 
-    if (left && !leftWasDown && found && !(hit.x == 32 && hit.z == 32 && hit.y <= 0)) {
+    if (left && !leftWasDown && found) {
         world[hit.x][hit.y][hit.z] = 0;
+        markChunkDirty(hit.x, hit.z);
         changed = true;
     }
     if (right && !rightWasDown && found && insideWorld(previous.x, previous.y, previous.z) &&
         world[previous.x][previous.y][previous.z] == 0) {
         world[previous.x][previous.y][previous.z] = selectedBlock;
         if (collides(player)) world[previous.x][previous.y][previous.z] = 0;
-        else changed = true;
+        else {
+            markChunkDirty(previous.x, previous.z);
+            changed = true;
+        }
     }
     leftWasDown = left;
     rightWasDown = right;
-    if (changed) rebuildWorldMesh();
+    if (changed) rebuildDirtyChunks();
 }
 
-void setCommonUniforms(const glm::mat4& view, const glm::mat4& projection, const glm::vec3& camera, const glm::vec3& fog) {
+glm::vec4 matrixRow(const glm::mat4& m, int row) {
+    return glm::vec4(m[0][row], m[1][row], m[2][row], m[3][row]);
+}
+
+std::array<Plane, 6> extractFrustum(const glm::mat4& matrix) {
+    glm::vec4 r0 = matrixRow(matrix, 0);
+    glm::vec4 r1 = matrixRow(matrix, 1);
+    glm::vec4 r2 = matrixRow(matrix, 2);
+    glm::vec4 r3 = matrixRow(matrix, 3);
+    glm::vec4 raw[6] = {r3 + r0, r3 - r0, r3 + r1, r3 - r1, r3 + r2, r3 - r2};
+    std::array<Plane, 6> planes{};
+    for (int i = 0; i < 6; ++i) {
+        float magnitude = glm::length(glm::vec3(raw[i]));
+        planes[i].normal = glm::vec3(raw[i]) / magnitude;
+        planes[i].distance = raw[i].w / magnitude;
+    }
+    return planes;
+}
+
+bool chunkVisible(const std::array<Plane, 6>& planes, int cx, int cz) {
+    glm::vec3 minimum(cx * CHUNK_SIZE - 0.5f, -0.5f, cz * CHUNK_SIZE - 0.5f);
+    glm::vec3 maximum((cx + 1) * CHUNK_SIZE - 0.5f, WORLD_Y - 0.5f,
+                      (cz + 1) * CHUNK_SIZE - 0.5f);
+    for (const Plane& plane : planes) {
+        glm::vec3 positive(
+            plane.normal.x >= 0.0f ? maximum.x : minimum.x,
+            plane.normal.y >= 0.0f ? maximum.y : minimum.y,
+            plane.normal.z >= 0.0f ? maximum.z : minimum.z
+        );
+        if (glm::dot(plane.normal, positive) + plane.distance < 0.0f) return false;
+    }
+    return true;
+}
+
+void setFrameUniforms(const glm::mat4& view, const glm::mat4& projection,
+                      const glm::vec3& camera, const glm::vec3& fog) {
     glUseProgram(shaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uView"), 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uProjection"), 1, GL_FALSE, glm::value_ptr(projection));
-    glUniform3fv(glGetUniformLocation(shaderProgram, "uCameraPos"), 1, glm::value_ptr(camera));
-    glUniform3fv(glGetUniformLocation(shaderProgram, "uFogColor"), 1, glm::value_ptr(fog));
-    glm::vec3 sun(-0.45f, 0.75f + 0.2f * std::sin(worldTime * 0.035f), -0.35f);
-    glUniform3fv(glGetUniformLocation(shaderProgram, "uSunDirection"), 1, glm::value_ptr(sun));
-    glUniform1f(glGetUniformLocation(shaderProgram, "uFogDensity"), 0.012f);
-    glUniform1f(glGetUniformLocation(shaderProgram, "uTime"), worldTime);
-    glUniform1i(glGetUniformLocation(shaderProgram, "uAtlas"), 0);
+    glUniformMatrix4fv(locView, 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(locProjection, 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform3fv(locCamera, 1, glm::value_ptr(camera));
+    glUniform3fv(locFog, 1, glm::value_ptr(fog));
+    float sunAngle = worldTime * 0.04f;
+    glm::vec3 sun(std::cos(sunAngle) * 0.55f, std::sin(sunAngle), -0.35f);
+    glUniform3fv(locSun, 1, glm::value_ptr(sun));
+    glUniform1f(locFogDensity, 0.009f);
+    glUniform1f(locTime, worldTime);
+    glUniform1i(locAtlas, 0);
 }
 
-void renderWorld(const glm::mat4& view, const glm::mat4& projection, const glm::vec3& camera, const glm::vec3& fog) {
-    setCommonUniforms(view, projection, camera, fog);
-    glUniform1i(glGetUniformLocation(shaderProgram, "uTextured"), 1);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uModel"), 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
+int renderWorld(const glm::mat4& view, const glm::mat4& projection,
+                const glm::vec3& camera, const glm::vec3& fog) {
+    setFrameUniforms(view, projection, camera, fog);
+    glUniform1i(locTextured, 1);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, atlasTexture);
-    glBindVertexArray(worldVAO);
-    glDrawArrays(GL_TRIANGLES, 0, worldVertexCount);
+    auto planes = extractFrustum(projection * view);
+    int visible = 0;
+
+    for (int cz = 0; cz < CHUNKS_Z; ++cz) {
+        for (int cx = 0; cx < CHUNKS_X; ++cx) {
+            ChunkMesh& chunk = chunks[chunkIndex(cx, cz)];
+            if (!chunk.vertexCount || !chunkVisible(planes, cx, cz)) continue;
+            glm::mat4 model = glm::translate(glm::mat4(1.0f),
+                glm::vec3(cx * CHUNK_SIZE, 0.0f, cz * CHUNK_SIZE));
+            glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+            glBindVertexArray(chunk.vao);
+            glDrawArrays(GL_TRIANGLES, 0, chunk.vertexCount);
+            ++visible;
+        }
+    }
+    return visible;
 }
 
-void renderTarget(const glm::mat4& view, const glm::mat4& projection, const glm::vec3& camera, const glm::vec3& fog) {
+void renderTarget(const glm::mat4& view, const glm::mat4& projection,
+                  const glm::vec3& camera, const glm::vec3& fog) {
     glm::ivec3 hit, previous;
     if (!raycast(hit, previous)) return;
-    setCommonUniforms(view, projection, camera, fog);
-    glUniform1i(glGetUniformLocation(shaderProgram, "uTextured"), 0);
-    glUniform3f(glGetUniformLocation(shaderProgram, "uSolidColor"), 1.0f, 0.92f, 0.24f);
+    setFrameUniforms(view, projection, camera, fog);
+    glUniform1i(locTextured, 0);
+    glUniform3f(locSolidColor, 1.0f, 0.91f, 0.22f);
     glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(hit));
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uModel"), 1, GL_FALSE, glm::value_ptr(model));
+    glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
     glBindVertexArray(cubeVAO);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     glLineWidth(2.0f);
@@ -549,8 +768,8 @@ glm::vec3 uiColor(int id) {
         case 4: return {0.48f,0.27f,0.11f};
         case 5: return {0.13f,0.42f,0.12f};
         case 6: return {0.78f,0.69f,0.43f};
-        case 7: return {0.55f,0.20f,0.16f};
-        default: return {0.76f,0.55f,0.18f};
+        case 7: return {0.88f,0.91f,0.96f};
+        default: return {0.72f,0.48f,0.16f};
     }
 }
 
@@ -561,7 +780,7 @@ void drawUI() {
     int cx = screenWidth / 2;
     int cy = screenHeight / 2;
     glScissor(cx - 1, cy - 9, 2, 18);
-    glClearColor(1.0f, 1.0f, 1.0f, 0.95f);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glScissor(cx - 9, cy - 1, 18, 2);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -608,7 +827,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft 3D | 27.1", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.1", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -636,15 +855,19 @@ int main() {
     glEnable(GL_MULTISAMPLE);
 
     createShader();
-    createGeometry();
+    setupGeometry();
     createAtlas();
     generateWorld();
-    rebuildWorldMesh();
+    if (loadWorld()) std::cout << "Saved world loaded.\n";
+    else std::cout << "Generated a new world.\n";
+    for (ChunkMesh& chunk : chunks) chunk.dirty = true;
+    rebuildDirtyChunks();
 
     double lastFrame = glfwGetTime();
     double titleTimer = 0.0;
     int frames = 0;
     float fps = 0.0f;
+    int visibleChunks = 0;
 
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -655,17 +878,19 @@ int main() {
         processInput(window, dt);
         processBlocks(window);
 
-        float daylight = 0.5f + 0.5f * std::sin(worldTime * 0.035f);
-        glm::vec3 sky = glm::mix(glm::vec3(0.035f,0.045f,0.10f), glm::vec3(0.48f,0.72f,0.94f), daylight);
+        float daylight = 0.5f + 0.5f * std::sin(worldTime * 0.04f);
+        glm::vec3 nightSky(0.025f,0.035f,0.09f);
+        glm::vec3 daySky(0.48f,0.72f,0.94f);
+        glm::vec3 sky = glm::mix(nightSky, daySky, daylight);
         glClearColor(sky.r, sky.g, sky.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glm::mat4 projection = glm::perspective(glm::radians(76.0f),
-            static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f, 150.0f);
+            static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f, 120.0f);
         glm::vec3 front = cameraFront();
         glm::mat4 view = glm::lookAt(player, player + front, glm::vec3(0,1,0));
 
-        renderWorld(view, projection, player, sky);
+        visibleChunks = renderWorld(view, projection, player, sky);
         renderTarget(view, projection, player, sky);
         drawUI();
 
@@ -678,21 +903,23 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft 3D 27.1 | " + std::to_string(static_cast<int>(fps)) +
-                " FPS | " + std::to_string(static_cast<int>(player.x)) + ", " +
-                std::to_string(static_cast<int>(player.y)) + ", " +
+            std::string title = "MiniCraft3D 27.1 | " + std::to_string(static_cast<int>(fps)) +
+                " FPS | Chunks " + std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
+                " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
+                std::to_string(static_cast<int>(player.y)) + "," +
                 std::to_string(static_cast<int>(player.z));
             glfwSetWindowTitle(window, title.c_str());
         }
     }
 
+    saveWorld();
     glDeleteTextures(1, &atlasTexture);
-    glDeleteVertexArrays(1, &worldVAO);
-    glDeleteBuffers(1, &worldVBO);
+    for (ChunkMesh& chunk : chunks) {
+        glDeleteVertexArrays(1, &chunk.vao);
+        glDeleteBuffers(1, &chunk.vbo);
+    }
     glDeleteVertexArrays(1, &cubeVAO);
     glDeleteBuffers(1, &cubeVBO);
-    glDeleteVertexArrays(1, &lineVAO);
-    glDeleteBuffers(1, &lineVBO);
     glDeleteProgram(shaderProgram);
     glfwDestroyWindow(window);
     glfwTerminate();
