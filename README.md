@@ -1,16 +1,20 @@
-# MiniCraft3D 27.2
+# MiniCraft3D 27.3
 
-A Minecraft-inspired voxel sandbox written in C++17 and OpenGL 3.3 Core. No game engine.
+A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core. No game engine.
 
 ## Gameplay
 
-- 32-slot inventory with an 8-slot hotbar
-- Stack merging with a 64-item stack limit
-- Block drops with simple physics and proximity pickup
-- Item placement consumes inventory stacks
-- Recipe-based crafting: logs to planks, planks to sticks, and planks to a crafting table
-- Inventory and dropped items are saved with the world
-- Backward-compatible loading of 27.1 world saves
+- 32-slot inventory with an 8-slot hotbar and 64-item stack limits
+- Tool items: wooden pickaxe, stone pickaxe, wooden axe, wooden shovel and wooden sword
+- Individual tool durability; broken tools are removed from the inventory
+- Mining progress depends on block hardness and tool efficiency
+- Stone and ore require a pickaxe to drop their block item
+- Multi-ingredient recipe crafting for tools
+- Health and hunger with sprint exhaustion, natural regeneration and starvation
+- Fall damage and automatic respawn
+- Block drops, proximity pickup and inventory-aware placement
+- Inventory, tool durability, health, hunger and drops persist in world saves
+- Backward-compatible loading of 27.1 and 27.2 world saves
 
 ## World and rendering
 
@@ -21,8 +25,8 @@ A Minecraft-inspired voxel sandbox written in C++17 and OpenGL 3.3 Core. No game
 - Procedural plains, forest, desert and snowy regions
 - Underground caves and small ore deposits
 - First-person movement, collision, jumping and sprinting
-- Block placement and breaking with a target outline
 - Animated daylight, sky tint and distance fog
+- Health and hunger bars; tool durability bars in inventory slots
 
 ## Requirements
 
@@ -49,22 +53,25 @@ Run `build.bat` from the project directory. Then launch `MiniCraft3D.exe`.
 | Mouse | Look |
 | Space | Jump |
 | Left Shift | Sprint |
-| Left click | Break block and drop its item |
+| Hold left click | Mine a targeted block |
 | Right click | Place the selected hotbar block |
 | 1-8 | Select hotbar slot |
 | Mouse wheel | Change selected hotbar slot |
-| E | Open or close the inventory panel |
+| E | Open or close inventory |
+| Click inventory slot | Swap with selected hotbar slot |
 | C | Craft the first available recipe |
 | F5 | Save world |
 | F9 | Load world |
 | Esc | Exit |
 
-The inventory panel displays the 24 backpack slots above the hotbar. Click a backpack slot to swap it with the selected hotbar slot; click a hotbar slot to select it. Items are collected automatically when the player gets close to a drop. Crafting consumes ingredients from any inventory slot.
+Mining takes time based on block hardness and the held tool. Pickaxes mine stone and ore efficiently and are required to collect them. Axes are effective on logs; shovels are effective on soil and sand. Every tool has its own durability and breaks when exhausted.
 
-Worlds are saved to `MiniCraft3D.world` on exit. Existing 27.1 saves remain loadable; the next save upgrades them to the 27.2 format.
+Crafting recipes include planks, sticks, a crafting table, wooden and stone pickaxes, a wooden axe, shovel and sword. Ingredients are consumed only when the output can fit in the inventory.
 
-Textures are generated procedurally. No external image assets or image loader are required.
+Health and hunger are shown at the top-left of the screen. Sprinting consumes hunger faster; high hunger enables natural regeneration, while starvation causes damage. Hard falls cause damage. At zero health the player respawns with full health and reduced hunger.
+
+Worlds are saved to `MiniCraft3D.world` on exit. Existing 27.1 and 27.2 saves remain loadable and are upgraded to the 27.3 format on the next save.
 
 ## Tests
 
-The gameplay module has standalone tests for stack limits, item removal and crafting recipes. GitHub Actions runs these tests before compiling the Windows game.
+GitHub Actions runs standalone tests for inventory stacking, crafting, tool durability, harvest requirements and survival stats before compiling the Windows game.
