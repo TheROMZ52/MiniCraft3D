@@ -846,7 +846,8 @@ void processBlocks(GLFWwindow* window, float dt) {
                 drop.vy = 1.8f;
                 itemDrops.push_back(drop);
             }
-            if (mc::Items::isTool(heldItem))
+            if (mc::Items::isTool(heldItem) &&
+                mc::Items::toolType(heldItem) != mc::ToolType::Sword)
                 inventory.damageItem(static_cast<std::size_t>(selectedBlock - 1));
             markChunkDirty(hit.x, hit.z);
             changed = true;
