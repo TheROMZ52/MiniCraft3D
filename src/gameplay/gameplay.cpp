@@ -50,8 +50,8 @@ bool Items::canHarvest(int itemId, int blockId) {
     ToolType tool = toolType(itemId);
     if (blockId == 3) return tool == ToolType::Pickaxe;
     if (blockId == 8) return itemId == 21;
-    if (blockId == 4 || blockId == 5) return tool == ToolType::Axe;
-    if (blockId == 1 || blockId == 2 || blockId == 6 || blockId == 7 || blockId == 9)
+    if (blockId == 4 || blockId == 5 || blockId == 9) return tool == ToolType::Axe;
+    if (blockId == 1 || blockId == 2 || blockId == 6 || blockId == 7)
         return tool == ToolType::Shovel;
     return false;
 }
