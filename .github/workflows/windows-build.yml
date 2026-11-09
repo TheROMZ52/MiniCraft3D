@@ -10,9 +10,6 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
@@ -25,6 +22,7 @@ jobs:
             mingw-w64-ucrt-x86_64-glew
             mingw-w64-ucrt-x86_64-glm
       - name: Compile
+        shell: msys2 {0}
         run: g++ main.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
       - name: Upload executable
         uses: actions/upload-artifact@v4
