@@ -666,8 +666,8 @@ void loadSettings() {
 
 void saveSettings() {
     std::ofstream file("MiniCraft3D.cfg", std::ios::trunc);
-    if (file) file << fieldOfView << '\\n' << mouseSensitivity << '\\n'
-                  << renderDistanceChunks << '\\n' << showDebugInfo << '\\n' << viewBobbing << '\\n';
+    if (file) file << fieldOfView << '\n' << mouseSensitivity << '\n'
+                  << renderDistanceChunks << '\n' << showDebugInfo << '\n' << viewBobbing << '\n';
 }
 
 void saveWorld() {
