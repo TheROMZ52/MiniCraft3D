@@ -877,6 +877,7 @@ void processInput(GLFWwindow* window, float dt) {
         if (inventoryOpen) {
             inventoryOpen = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        } else if (uiScreen == UiScreen::MainMenu) {
         } else if (uiScreen == UiScreen::WorldSelect) {
             uiScreen = UiScreen::MainMenu;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
@@ -886,26 +887,6 @@ void processInput(GLFWwindow* window, float dt) {
         } else if (uiScreen == UiScreen::Settings) {
             uiScreen = settingsReturnScreen;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (uiScreen == UiScreen::WorldSelect) {
-        bool selected = false;
-        for (std::size_t i = 0; i < worldPaths.size() && i < 5; ++i) {
-            int rowY = centerY + 82 - static_cast<int>(i) * 43;
-            if (inside(centerX - 190, rowY, 380, 34)) {
-                startSelectedWorld(worldPaths[i], false, window);
-                selected = true;
-                break;
-            }
-        }
-        if (!selected && inside(centerX - 190, centerY - 145, 380, 38)) {
-            std::string path = createWorldPath();
-            startSelectedWorld(path, true, window);
-            saveWorld();
-        } else if (!selected && inside(centerX - 190, centerY - 195, 380, 34)) {
-            uiScreen = UiScreen::MainMenu;
-        }
-    } else if (uiScreen == UiScreen::Crafting) {
-            uiScreen = UiScreen::Gameplay;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         } else {
             uiScreen = UiScreen::Gameplay;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -1030,6 +1011,23 @@ void processUiMouse(GLFWwindow* window) {
             uiScreen = UiScreen::Settings;
         } else if (inside(centerX - 130, centerY - 56, 260, 42)) {
             glfwSetWindowShouldClose(window, true);
+        }
+    } else if (uiScreen == UiScreen::WorldSelect) {
+        bool selected = false;
+        for (std::size_t i = 0; i < worldPaths.size() && i < 5; ++i) {
+            int rowY = centerY + 82 - static_cast<int>(i) * 43;
+            if (inside(centerX - 190, rowY, 380, 34)) {
+                startSelectedWorld(worldPaths[i], false, window);
+                selected = true;
+                break;
+            }
+        }
+        if (!selected && inside(centerX - 190, centerY - 145, 380, 38)) {
+            std::string path = createWorldPath();
+            startSelectedWorld(path, true, window);
+            saveWorld();
+        } else if (!selected && inside(centerX - 190, centerY - 195, 380, 34)) {
+            uiScreen = UiScreen::MainMenu;
         }
     } else if (uiScreen == UiScreen::Crafting) {
         if (inside(centerX - 210, centerY - 220, 420, 34)) {
