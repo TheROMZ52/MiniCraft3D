@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -235,6 +236,71 @@ void createAtlas() {
                 pixels[index + 1] = static_cast<unsigned char>(std::clamp(base.g * variation, 0.0f, 1.0f) * 255);
                 pixels[index + 2] = static_cast<unsigned char>(std::clamp(base.b * variation, 0.0f, 1.0f) * 255);
                 pixels[index + 3] = 255;
+            }
+        }
+    }
+    {
+        std::ifstream textureFile("textures/atlas.ppm", std::ios::binary);
+        if (textureFile) {
+            auto nextToken = [&]() {
+                std::string token;
+                while (textureFile >> std::ws && textureFile.peek() == '#') {
+                    std::string ignored;
+                    std::getline(textureFile, ignored);
+                }
+                textureFile >> token;
+                return token;
+            };
+            std::string format = nextToken();
+            int width = 0, height = 0, maximum = 0;
+            try {
+                width = std::stoi(nextToken());
+                height = std::stoi(nextToken());
+                maximum = std::stoi(nextToken());
+            } catch (...) {
+                width = height = maximum = 0;
+            }
+            if ((format == "P6" || format == "P3") &&
+                width == tileSize * columns && height == tileSize && maximum == 255) {
+                std::vector<unsigned char> external(static_cast<std::size_t>(width) * height * 4);
+                bool valid = true;
+                if (format == "P6") {
+                    char separator = 0;
+                    textureFile.get(separator);
+                    if (separator == '\r' && textureFile.peek() == '\n') textureFile.get();
+                    if (!std::isspace(static_cast<unsigned char>(separator))) valid = false;
+                    std::vector<unsigned char> rgb(static_cast<std::size_t>(width) * height * 3);
+                    if (valid) {
+                        textureFile.read(reinterpret_cast<char*>(rgb.data()),
+                                         static_cast<std::streamsize>(rgb.size()));
+                        valid = static_cast<bool>(textureFile);
+                    }
+                    if (valid) {
+                        for (std::size_t i = 0, j = 0; i < external.size(); i += 4, j += 3) {
+                            external[i] = rgb[j];
+                            external[i + 1] = rgb[j + 1];
+                            external[i + 2] = rgb[j + 2];
+                            external[i + 3] = 255;
+                        }
+                    }
+                } else {
+                    for (std::size_t i = 0; i < external.size(); i += 4) {
+                        int r = 0, g = 0, blue = 0;
+                        if (!(textureFile >> r >> g >> blue) ||
+                            r < 0 || r > 255 || g < 0 || g > 255 || blue < 0 || blue > 255) {
+                            valid = false;
+                            break;
+                        }
+                        external[i] = static_cast<unsigned char>(r);
+                        external[i + 1] = static_cast<unsigned char>(g);
+                        external[i + 2] = static_cast<unsigned char>(blue);
+                        external[i + 3] = 255;
+                    }
+                }
+                if (valid) pixels = std::move(external);
+                else std::cerr << "Texture atlas is invalid; using the built-in atlas.\\n";
+            } else {
+                std::cerr << "Texture atlas must be a 160x16 PPM image; using built-in atlas.\\n";
             }
         }
     }
@@ -690,7 +756,6 @@ bool loadWorld() {
     }
 
     generateWorld();
-    std::fill(&world[0][0][0], &world[0][0][0] + WORLD_X * WORLD_Y * WORLD_Z, 0);
     const int offsetX = std::max(0, (WORLD_X - static_cast<int>(header.width)) / 2);
     const int offsetZ = std::max(0, (WORLD_Z - static_cast<int>(header.depth)) / 2);
     const int copyX = std::min(WORLD_X, static_cast<int>(header.width));
