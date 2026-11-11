@@ -4,7 +4,7 @@ A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core
 
 ## Gameplay
 
-- Main menu with Singleplayer, Settings and Quit
+- Main menu with Singleplayer, world selection, multiple save slots, Settings and Quit
 - 32-slot inventory and 8-slot hotbar
 - Interactive recipe book (R) and quick crafting (C)
 - Wooden and stone pickaxes, axes, shovels and swords
@@ -16,6 +16,7 @@ A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core
 ## World and rendering
 
 - 128 x 32 x 128 procedural voxel world (four times the previous horizontal area)
+- Up to five saved worlds are shown in the world selector; new worlds receive unique save files
 - 64 independently meshed chunks with frustum culling and hidden-face removal
 - Vertex ambient occlusion, animated daylight and distance fog
 - Built-in pixel-art texture atlas with optional external PPM atlas
