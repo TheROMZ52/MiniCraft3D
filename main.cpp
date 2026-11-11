@@ -53,9 +53,12 @@ bool inventoryWasDown = false;
 bool craftWasDown = false;
 bool inventoryClickWasDown = false;
 bool uiClickWasDown = false;
+bool craftingWasDown = false;
+bool worldInitialized = false;
 bool pauseWasDown = false;
-enum class UiScreen { Gameplay, Pause, Settings };
-UiScreen uiScreen = UiScreen::Gameplay;
+enum class UiScreen { MainMenu, Gameplay, Pause, Settings, Crafting };
+UiScreen uiScreen = UiScreen::MainMenu;
+UiScreen settingsReturnScreen = UiScreen::Pause;
 float mouseSensitivity = 0.105f;
 float fieldOfView = 76.0f;
 bool showDebugInfo = true;
@@ -702,8 +705,11 @@ void processInput(GLFWwindow* window, float dt) {
             uiScreen = UiScreen::Pause;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         } else if (uiScreen == UiScreen::Settings) {
-            uiScreen = UiScreen::Pause;
+            uiScreen = settingsReturnScreen;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else if (uiScreen == UiScreen::Crafting) {
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         } else {
             uiScreen = UiScreen::Gameplay;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -721,6 +727,7 @@ void processInput(GLFWwindow* window, float dt) {
 
     bool inventoryDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
     bool craftDown = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+    bool recipeBookDown = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
     if (inventoryDown && !inventoryWasDown) {
         inventoryOpen = !inventoryOpen;
         glfwSetInputMode(window, GLFW_CURSOR, inventoryOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
@@ -734,6 +741,12 @@ void processInput(GLFWwindow* window, float dt) {
     }
     inventoryWasDown = inventoryDown;
     craftWasDown = craftDown;
+    if (recipeBookDown && !craftingWasDown) {
+        uiScreen = UiScreen::Crafting;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        firstMouse = true;
+    }
+    craftingWasDown = recipeBookDown;
 
     bool saveDown = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
     bool loadDown = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
@@ -812,7 +825,37 @@ void processUiMouse(GLFWwindow* window) {
     auto inside = [&](int left, int bottom, int width, int height) {
         return x >= left && x < left + width && y >= bottom && y < bottom + height;
     };
-    if (uiScreen == UiScreen::Pause) {
+    if (uiScreen == UiScreen::MainMenu) {
+        if (inside(centerX - 130, centerY + 48, 260, 42)) {
+            if (!worldInitialized) {
+                if (!loadWorld()) generateWorld();
+                for (ChunkMesh& chunk : chunks) chunk.dirty = true;
+                rebuildDirtyChunks();
+                worldInitialized = true;
+            }
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            firstMouse = true;
+        } else if (inside(centerX - 130, centerY - 4, 260, 42)) {
+            settingsReturnScreen = UiScreen::MainMenu;
+            uiScreen = UiScreen::Settings;
+        } else if (inside(centerX - 130, centerY - 56, 260, 42)) {
+            glfwSetWindowShouldClose(window, true);
+        }
+    } else if (uiScreen == UiScreen::Crafting) {
+        if (inside(centerX - 210, centerY - 174, 420, 34)) {
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        } else {
+            for (std::size_t i = 0; i < mc::Crafting::recipeCount(); ++i) {
+                int rowY = centerY + 112 - static_cast<int>(i) * 36;
+                if (inside(centerX - 190, rowY, 380, 30) && mc::Crafting::craft(inventory, i)) {
+                    lastCraftMessage = std::string("Crafted ") + mc::Crafting::recipe(i).name;
+                    break;
+                }
+            }
+        }
+    } else if (uiScreen == UiScreen::Pause) {
         if (inside(centerX - 116, centerY + 48, 232, 38)) {
             uiScreen = UiScreen::Gameplay;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -821,6 +864,7 @@ void processUiMouse(GLFWwindow* window) {
             saveWorld();
             lastCraftMessage = "World saved";
         } else if (inside(centerX - 116, centerY - 46, 232, 38)) {
+            settingsReturnScreen = UiScreen::Pause;
             uiScreen = UiScreen::Settings;
         } else if (inside(centerX - 116, centerY - 93, 232, 38)) {
             glfwSetWindowShouldClose(window, true);
@@ -838,7 +882,7 @@ void processUiMouse(GLFWwindow* window) {
         else if (inside(left + 274, centerY - 77, 138, 34))
             showDebugInfo = !showDebugInfo;
         else if (inside(centerX - 116, centerY - 153, 232, 38))
-            uiScreen = UiScreen::Pause;
+            uiScreen = settingsReturnScreen;
     }
     uiClickWasDown = down;
 }
@@ -1264,6 +1308,31 @@ void drawUI() {
                  highlighted ? glm::vec3(1.0f,0.88f,0.54f) : white, true);
     };
 
+    if (uiScreen == UiScreen::MainMenu) {
+        drawUiRect(0, 0, screenWidth, screenHeight, {0.025f,0.045f,0.075f});
+        drawUiRect(centerX - 270, centerY - 180, 540, 360, panelEdge);
+        drawUiRect(centerX - 266, centerY - 176, 532, 352, panel);
+        drawText("MINICRAFT 3D", centerX, centerY + 112, 5, white, true);
+        drawText("A VOXEL SURVIVAL GAME", centerX, centerY + 78, 1, muted, true);
+        drawButton(centerX - 130, centerY + 48, 260, 42, "SINGLEPLAYER", true);
+        drawButton(centerX - 130, centerY - 4, 260, 42, "SETTINGS");
+        drawButton(centerX - 130, centerY - 56, 260, 42, "QUIT GAME");
+        drawText("27.5 EXPANSION", centerX, centerY - 145, 1, muted, true);
+    }
+
+    if (uiScreen == UiScreen::Crafting) {
+        drawUiRect(centerX - 230, centerY - 205, 460, 410, panelEdge);
+        drawUiRect(centerX - 226, centerY - 201, 452, 402, panel);
+        drawText("RECIPE BOOK", centerX, centerY + 160, 3, white, true);
+        for (std::size_t i = 0; i < mc::Crafting::recipeCount(); ++i) {
+            const mc::Recipe& recipe = mc::Crafting::recipe(i);
+            int rowY = centerY + 112 - static_cast<int>(i) * 36;
+            bool available = mc::Crafting::canCraft(inventory, i);
+            drawButton(centerX - 190, rowY, 380, 30, recipe.name, available);
+        }
+        drawButton(centerX - 210, centerY - 174, 420, 34, "BACK", true);
+    }
+
     if (uiScreen == UiScreen::Pause || uiScreen == UiScreen::Settings) {
         const int panelWidth = uiScreen == UiScreen::Pause ? 360 : 430;
         const int panelHeight = 340;
@@ -1425,7 +1494,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.4", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.5", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -1436,7 +1505,7 @@ int main() {
     glfwSetFramebufferSizeCallback(window, framebufferCallback);
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwSwapInterval(1);
 
     glewExperimental = GL_TRUE;
@@ -1455,11 +1524,7 @@ int main() {
     createShader();
     setupGeometry();
     createAtlas();
-    generateWorld();
-    if (loadWorld()) std::cout << "Saved world loaded.\n";
-    else std::cout << "Generated a new world.\n";
     for (ChunkMesh& chunk : chunks) chunk.dirty = true;
-    rebuildDirtyChunks();
 
     double lastFrame = glfwGetTime();
     double titleTimer = 0.0;
@@ -1512,7 +1577,7 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 27.4";
+            std::string title = "MiniCraft3D 27.5";
             if (showDebugInfo) {
                 title += " | " + std::to_string(static_cast<int>(fps)) + " FPS | Chunks " +
                     std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
