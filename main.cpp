@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -57,9 +58,12 @@ bool uiClickWasDown = false;
 bool craftingWasDown = false;
 bool worldInitialized = false;
 bool pauseWasDown = false;
-enum class UiScreen { MainMenu, Gameplay, Pause, Settings, Crafting };
+enum class UiScreen { MainMenu, WorldSelect, Gameplay, Pause, Settings, Crafting };
 UiScreen uiScreen = UiScreen::MainMenu;
 UiScreen settingsReturnScreen = UiScreen::Pause;
+std::string currentWorldPath = "MiniCraft3D.world";
+std::vector<std::string> worldPaths;
+std::vector<std::string> worldNames;
 float mouseSensitivity = 0.105f;
 float fieldOfView = 76.0f;
 bool showDebugInfo = true;
@@ -679,7 +683,11 @@ void saveWorld() {
     };
     Header header{{'M','C','3','D','2','7','3','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
     float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
-    std::ofstream file("MiniCraft3D.world", std::ios::binary | std::ios::trunc);
+    std::error_code directoryError;
+    std::filesystem::path savePath(currentWorldPath);
+    if (!savePath.parent_path().empty())
+        std::filesystem::create_directories(savePath.parent_path(), directoryError);
+    std::ofstream file(currentWorldPath, std::ios::binary | std::ios::trunc);
     if (!file) {
         std::cerr << "Could not save world.\n";
         return;
@@ -712,7 +720,7 @@ bool loadWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    std::ifstream file("MiniCraft3D.world", std::ios::binary);
+    std::ifstream file(currentWorldPath, std::ios::binary);
     if (!file) return false;
     Header header{};
     file.read(reinterpret_cast<char*>(&header), sizeof(header));
@@ -804,19 +812,98 @@ bool loadWorld() {
     return true;
 }
 
+
+void refreshWorldList() {
+    worldPaths.clear();
+    worldNames.clear();
+    std::error_code error;
+    std::filesystem::create_directories("worlds", error);
+    if (std::filesystem::exists("MiniCraft3D.world")) {
+        worldPaths.push_back("MiniCraft3D.world");
+        worldNames.push_back("Legacy World");
+    }
+    for (const auto& entry : std::filesystem::directory_iterator("worlds", error)) {
+        if (error) break;
+        if (!entry.is_regular_file() || entry.path().extension() != ".world") continue;
+        worldPaths.push_back(entry.path().string());
+        worldNames.push_back(entry.path().stem().string());
+    }
+    std::vector<std::size_t> order(worldPaths.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        return worldNames[a] < worldNames[b];
+    });
+    std::vector<std::string> sortedPaths, sortedNames;
+    for (std::size_t index : order) {
+        sortedPaths.push_back(worldPaths[index]);
+        sortedNames.push_back(worldNames[index]);
+    }
+    worldPaths = std::move(sortedPaths);
+    worldNames = std::move(sortedNames);
+}
+
+void startSelectedWorld(const std::string& path, bool createNew, GLFWwindow* window) {
+    currentWorldPath = path;
+    if (createNew) {
+        inventory.clear();
+        itemDrops.clear();
+        playerStats.set(mc::PlayerStats::MaxHealth, mc::PlayerStats::MaxHunger);
+        yaw = -90.0f;
+        pitch = 0.0f;
+        worldTime = 0.0f;
+        generateWorld();
+    } else if (!loadWorld()) {
+        generateWorld();
+    }
+    for (ChunkMesh& chunk : chunks) chunk.dirty = true;
+    rebuildDirtyChunks();
+    worldInitialized = true;
+    uiScreen = UiScreen::Gameplay;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    firstMouse = true;
+}
+
+std::string createWorldPath() {
+    int number = 1;
+    std::error_code error;
+    while (std::filesystem::exists("worlds/World " + std::to_string(number) + ".world", error))
+        ++number;
+    return "worlds/World " + std::to_string(number) + ".world";
+}
+
 void processInput(GLFWwindow* window, float dt) {
     bool escapeDown = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
     if (escapeDown && !pauseWasDown) {
         if (inventoryOpen) {
             inventoryOpen = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        } else if (uiScreen == UiScreen::WorldSelect) {
+            uiScreen = UiScreen::MainMenu;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         } else if (uiScreen == UiScreen::Gameplay) {
             uiScreen = UiScreen::Pause;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         } else if (uiScreen == UiScreen::Settings) {
             uiScreen = settingsReturnScreen;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (uiScreen == UiScreen::Crafting) {
+        } else if (uiScreen == UiScreen::WorldSelect) {
+        bool selected = false;
+        for (std::size_t i = 0; i < worldPaths.size() && i < 5; ++i) {
+            int rowY = centerY + 82 - static_cast<int>(i) * 43;
+            if (inside(centerX - 190, rowY, 380, 34)) {
+                startSelectedWorld(worldPaths[i], false, window);
+                selected = true;
+                break;
+            }
+        }
+        if (!selected && inside(centerX - 190, centerY - 145, 380, 38)) {
+            std::string path = createWorldPath();
+            startSelectedWorld(path, true, window);
+            saveWorld();
+        } else if (!selected && inside(centerX - 190, centerY - 195, 380, 34)) {
+            uiScreen = UiScreen::MainMenu;
+        }
+    } else if (uiScreen == UiScreen::Crafting) {
             uiScreen = UiScreen::Gameplay;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         } else {
@@ -936,15 +1023,8 @@ void processUiMouse(GLFWwindow* window) {
     };
     if (uiScreen == UiScreen::MainMenu) {
         if (inside(centerX - 130, centerY + 48, 260, 42)) {
-            if (!worldInitialized) {
-                if (!loadWorld()) generateWorld();
-                for (ChunkMesh& chunk : chunks) chunk.dirty = true;
-                rebuildDirtyChunks();
-                worldInitialized = true;
-            }
-            uiScreen = UiScreen::Gameplay;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            firstMouse = true;
+            refreshWorldList();
+            uiScreen = UiScreen::WorldSelect;
         } else if (inside(centerX - 130, centerY - 4, 260, 42)) {
             settingsReturnScreen = UiScreen::MainMenu;
             uiScreen = UiScreen::Settings;
@@ -1459,6 +1539,20 @@ void drawUI() {
         drawButton(centerX - 130, centerY - 4, 260, 42, "SETTINGS");
         drawButton(centerX - 130, centerY - 56, 260, 42, "QUIT GAME");
         drawText("27.5 EXPANSION", centerX, centerY - 145, 1, muted, true);
+    }
+
+    if (uiScreen == UiScreen::WorldSelect) {
+        drawUiRect(centerX - 250, centerY - 235, 500, 470, panelEdge);
+        drawUiRect(centerX - 246, centerY - 231, 492, 462, panel);
+        drawText("SELECT WORLD", centerX, centerY + 190, 3, white, true);
+        for (std::size_t i = 0; i < worldNames.size() && i < 5; ++i) {
+            int rowY = centerY + 82 - static_cast<int>(i) * 43;
+            drawButton(centerX - 190, rowY, 380, 34, worldNames[i], i == 0);
+        }
+        if (worldNames.empty())
+            drawText("NO SAVED WORLDS", centerX, centerY + 25, 2, muted, true);
+        drawButton(centerX - 190, centerY - 145, 380, 38, "CREATE NEW WORLD", true);
+        drawButton(centerX - 190, centerY - 195, 380, 34, "BACK");
     }
 
     if (uiScreen == UiScreen::Crafting) {
