@@ -8,3 +8,6 @@ build/
 *.exe
 *.world
 *.log
+MiniCraft3D.cfg
+*.backup
+*.tmp
