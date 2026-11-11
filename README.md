@@ -1,37 +1,51 @@
-# MiniCraft3D 27.4
+# MiniCraft3D 27.5
 
-A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core. No game engine.
+A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core. Built from scratch without a game engine.
 
 ## Gameplay
 
-- 32-slot inventory with an 8-slot hotbar and 64-item stack limits
-- Tool items: wooden pickaxe, stone pickaxe, wooden axe, wooden shovel and wooden sword
-- Individual tool durability; broken tools are removed from the inventory
-- Mining progress depends on block hardness and tool efficiency
-- Stone and ore require a pickaxe to drop their block item
-- Multi-ingredient recipe crafting for tools
-- Health and hunger with sprint exhaustion, natural regeneration and starvation
-- Fall damage and automatic respawn
-- Block drops, proximity pickup and inventory-aware placement
-- Inventory, tool durability, health, hunger and drops persist in world saves
-- Pause menu with resume, save and quit actions
-- Settings menu for field of view, mouse sensitivity and debug information
-- Backward-compatible loading of 27.1 and 27.2 world saves
+- Main menu with Singleplayer, Settings and Quit
+- 32-slot inventory and 8-slot hotbar
+- Interactive recipe book (R) and quick crafting (C)
+- Wooden and stone pickaxes, axes, shovels and swords
+- Tool durability, mining progression and harvest requirements
+- Health and hunger, sprint exhaustion, regeneration and starvation
+- Block drops, pickup, placement and persistent world saves
+- First-person hand swing and walk bobbing animations
 
 ## World and rendering
 
-- 16 independent chunk meshes with separate GPU vertex buffers
-- Frustum culling and hidden-face removal across chunk borders
-- Vertex ambient occlusion
-- Procedural 10-tile pixel-art texture atlas
-- Procedural plains, forest, desert and snowy regions
-- Underground caves and small ore deposits
-- First-person movement, collision, jumping and sprinting
-- Animated daylight, sky tint and distance fog
-- Pixel-art heart and hunger HUD with half-unit states
-- Redesigned hotbar with selected-slot highlight, item counts and durability meters
-- Inventory panel with a consistent dark block-style visual system
-- Custom crosshair and mining progress indicator
+- 128 x 32 x 128 procedural voxel world (four times the previous horizontal area)
+- 64 independently meshed chunks with frustum culling and hidden-face removal
+- Vertex ambient occlusion, animated daylight and distance fog
+- Built-in pixel-art texture atlas with optional external PPM atlas
+- Plains, forest, desert and snowy regions, caves, ores and trees
+- Legacy 27.1, 27.2 and 27.3 saves are migrated into the expanded world
+
+## Texture atlas
+
+The game looks for `textures/atlas.ppm` at startup. If it is missing or invalid, the built-in atlas is used.
+
+The external atlas must be a PPM P3 or P6 image exactly **160 x 16 pixels**, containing ten horizontal 16 x 16 tiles in this order:
+
+| Tile | Texture |
+|---:|---|
+| 0 | Grass top |
+| 1 | Dirt |
+| 2 | Stone |
+| 3 | Log |
+| 4 | Leaves |
+| 5 | Sand |
+| 6 | Snow |
+| 7 | Ore |
+| 8 | Grass side |
+| 9 | Planks |
+
+Keep each tile 16 x 16. Use nearest-neighbor filtering and avoid adding gaps between tiles.
+
+## Settings
+
+Settings are saved to `MiniCraft3D.cfg` and include FOV, mouse sensitivity, render distance, debug information and view bobbing.
 
 ## Requirements
 
@@ -40,7 +54,7 @@ A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core
 - GCC/G++
 - GLFW, GLEW and GLM
 
-Install the required packages in the MSYS2 UCRT64 terminal:
+Install packages in the MSYS2 UCRT64 terminal:
 
 ```bash
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glew mingw-w64-ucrt-x86_64-glm
@@ -48,7 +62,11 @@ pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-glfw mingw-w6
 
 ## Build
 
-Run `build.bat` from the project directory. Then launch `MiniCraft3D.exe`.
+Run `build.bat` from the project directory, then launch `MiniCraft3D.exe`.
+
+## Update
+
+Run `update.bat` to download the executable from the latest published GitHub release. Releases are published when a `v*` tag is pushed.
 
 ## Controls
 
@@ -58,25 +76,17 @@ Run `build.bat` from the project directory. Then launch `MiniCraft3D.exe`.
 | Mouse | Look |
 | Space | Jump |
 | Left Shift | Sprint |
-| Hold left click | Mine a targeted block |
-| Right click | Place the selected hotbar block |
+| Left click (hold) | Mine |
+| Right click | Place block |
 | 1-8 | Select hotbar slot |
-| Mouse wheel | Change selected hotbar slot |
-| E | Open or close inventory |
-| Click inventory slot | Swap with selected hotbar slot |
-| C | Craft the first available recipe |
+| Mouse wheel | Change selected slot |
+| E | Inventory |
+| R | Recipe book |
+| C | Quick-craft first available recipe |
 | F5 | Save world |
 | F9 | Load world |
-| Esc | Pause / resume; close inventory or return from settings |
-
-Mining takes time based on block hardness and the held tool. Pickaxes mine stone and ore efficiently and are required to collect them. Axes are effective on logs and planks; shovels are effective on soil and sand. Every tool has its own durability and breaks when exhausted.
-
-Crafting recipes include planks, sticks, a crafting table, wooden and stone pickaxes, a wooden axe, shovel and sword. Ingredients are consumed only when the output can fit in the inventory.
-
-Health and hunger use pixel-art icons above the hotbar. Sprinting consumes hunger faster; high hunger enables natural regeneration, while starvation causes damage. Hard falls cause damage. At zero health the player respawns with full health and reduced hunger.
-
-Worlds are saved to `MiniCraft3D.world` on exit. Existing 27.1 and 27.2 saves remain loadable and are upgraded to the 27.3 format on the next save.
+| Esc | Pause / resume / back |
 
 ## Tests
 
-GitHub Actions runs standalone tests for inventory stacking, crafting, tool durability, harvest requirements and survival stats before compiling the Windows game.
+GitHub Actions runs standalone inventory, crafting, tool durability, harvest requirement and survival-stat tests before compiling the Windows executable.
