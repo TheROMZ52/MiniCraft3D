@@ -63,6 +63,10 @@ UiScreen settingsReturnScreen = UiScreen::Pause;
 float mouseSensitivity = 0.105f;
 float fieldOfView = 76.0f;
 bool showDebugInfo = true;
+int renderDistanceChunks = 8;
+bool viewBobbing = true;
+float walkAnimationTime = 0.0f;
+float handSwingTime = 0.0f;
 double mouseX = 0.0;
 double mouseY = 0.0;
 std::string lastCraftMessage;
@@ -651,6 +655,21 @@ void setupGeometry() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
 }
 
+void loadSettings() {
+    std::ifstream file("MiniCraft3D.cfg");
+    if (!file) return;
+    file >> fieldOfView >> mouseSensitivity >> renderDistanceChunks >> showDebugInfo >> viewBobbing;
+    fieldOfView = std::clamp(fieldOfView, 60.0f, 100.0f);
+    mouseSensitivity = std::clamp(mouseSensitivity, 0.035f, 0.30f);
+    renderDistanceChunks = std::clamp(renderDistanceChunks, 4, 16);
+}
+
+void saveSettings() {
+    std::ofstream file("MiniCraft3D.cfg", std::ios::trunc);
+    if (file) file << fieldOfView << '\\n' << mouseSensitivity << '\\n'
+                  << renderDistanceChunks << '\\n' << showDebugInfo << '\\n' << viewBobbing << '\\n';
+}
+
 void saveWorld() {
     struct Header {
         char magic[8];
@@ -960,17 +979,23 @@ void processUiMouse(GLFWwindow* window) {
         }
     } else if (uiScreen == UiScreen::Settings) {
         const int left = centerX - 215;
-        if (inside(left + 274, centerY + 35, 42, 34))
+        if (inside(left + 274, centerY + 127, 42, 34))
             fieldOfView = std::clamp(fieldOfView - 2.0f, 60.0f, 100.0f);
-        else if (inside(left + 370, centerY + 35, 42, 34))
+        else if (inside(left + 370, centerY + 127, 42, 34))
             fieldOfView = std::clamp(fieldOfView + 2.0f, 60.0f, 100.0f);
-        else if (inside(left + 274, centerY - 21, 42, 34))
+        else if (inside(left + 274, centerY + 65, 42, 34))
             mouseSensitivity = std::clamp(mouseSensitivity - 0.01f, 0.035f, 0.30f);
-        else if (inside(left + 370, centerY - 21, 42, 34))
+        else if (inside(left + 370, centerY + 65, 42, 34))
             mouseSensitivity = std::clamp(mouseSensitivity + 0.01f, 0.035f, 0.30f);
-        else if (inside(left + 274, centerY - 77, 138, 34))
+        else if (inside(left + 274, centerY + 3, 42, 34))
+            renderDistanceChunks = std::clamp(renderDistanceChunks - 1, 4, 16);
+        else if (inside(left + 370, centerY + 3, 42, 34))
+            renderDistanceChunks = std::clamp(renderDistanceChunks + 1, 4, 16);
+        else if (inside(left + 274, centerY - 59, 138, 34))
             showDebugInfo = !showDebugInfo;
-        else if (inside(centerX - 116, centerY - 153, 232, 38))
+        else if (inside(left + 274, centerY - 121, 138, 34))
+            viewBobbing = !viewBobbing;
+        else if (inside(centerX - 116, centerY - 233, 232, 38))
             uiScreen = settingsReturnScreen;
     }
     uiClickWasDown = down;
@@ -1024,6 +1049,7 @@ void processBlocks(GLFWwindow* window, float dt) {
     bool found = raycast(hit, previous);
     bool left = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     bool right = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    if (left && !leftWasDown) handSwingTime = 1.0f;
     bool changed = false;
 
     if (left && found) {
@@ -1225,6 +1251,25 @@ void renderTarget(const glm::mat4& view, const glm::mat4& projection,
     glLineWidth(2.0f);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
+void renderFirstPersonHand(const glm::mat4& view, const glm::mat4& projection,
+                           const glm::vec3& camera) {
+    glm::vec3 front = cameraFront();
+    glm::vec3 right = glm::normalize(glm::cross(front, glm::vec3(0.0f, 1.0f, 0.0f)));
+    glm::vec3 up = glm::normalize(glm::cross(right, front));
+    float swing = handSwingTime > 0.0f ? std::sin((1.0f - handSwingTime) * 3.1415926f) : 0.0f;
+    glm::vec3 position = camera + front * 0.62f + right * (0.34f + swing * 0.08f)
+        - up * (0.34f + swing * 0.09f);
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
+    model = glm::rotate(model, glm::radians(-28.0f + swing * 58.0f), right);
+    model = glm::scale(model, glm::vec3(0.17f, 0.17f, 0.46f));
+    setFrameUniforms(view, projection, camera, {0.0f, 0.0f, 0.0f});
+    glUniform1i(locTextured, 0);
+    glUniform3f(locSolidColor, 0.72f, 0.48f, 0.34f);
+    glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+    glBindVertexArray(cubeVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
 glm::vec3 uiColor(int id) {
@@ -1430,7 +1475,7 @@ void drawUI() {
 
     if (uiScreen == UiScreen::Pause || uiScreen == UiScreen::Settings) {
         const int panelWidth = uiScreen == UiScreen::Pause ? 360 : 430;
-        const int panelHeight = 340;
+        const int panelHeight = uiScreen == UiScreen::Pause ? 340 : 500;
         const int left = centerX - panelWidth / 2;
         const int bottom = centerY - panelHeight / 2;
         drawUiRect(left - 4, bottom - 4, panelWidth + 8, panelHeight + 8, {0.015f,0.02f,0.03f});
@@ -1447,17 +1492,23 @@ void drawUI() {
             drawText(lastCraftMessage.empty() ? "ESC  RESUME" : lastCraftMessage,
                      centerX, bottom + 13, 1, muted, true);
         } else {
-            drawText("FIELD OF VIEW", left + 28, centerY + 48, 2, white);
-            drawButton(left + 274, centerY + 35, 42, 34, "-");
-            drawText(std::to_string(static_cast<int>(fieldOfView)), left + 336, centerY + 48, 2, white, true);
-            drawButton(left + 370, centerY + 35, 42, 34, "+");
-            drawText("MOUSE SENSITIVITY", left + 28, centerY - 8, 2, white);
-            drawButton(left + 274, centerY - 21, 42, 34, "-");
+            drawText("FIELD OF VIEW", left + 28, centerY + 140, 2, white);
+            drawButton(left + 274, centerY + 127, 42, 34, "-");
+            drawText(std::to_string(static_cast<int>(fieldOfView)), left + 336, centerY + 140, 2, white, true);
+            drawButton(left + 370, centerY + 127, 42, 34, "+");
+            drawText("MOUSE SENSITIVITY", left + 28, centerY + 78, 2, white);
+            drawButton(left + 274, centerY + 65, 42, 34, "-");
             drawText(std::to_string(static_cast<int>(mouseSensitivity * 1000.0f)),
-                     left + 336, centerY - 8, 2, white, true);
-            drawButton(left + 370, centerY - 21, 42, 34, "+");
-            drawText("DEBUG INFO", left + 28, centerY - 64, 2, white);
-            drawButton(left + 274, centerY - 77, 138, 34, showDebugInfo ? "ON" : "OFF", showDebugInfo);
+                     left + 336, centerY + 78, 2, white, true);
+            drawButton(left + 370, centerY + 65, 42, 34, "+");
+            drawText("RENDER DISTANCE", left + 28, centerY + 16, 2, white);
+            drawButton(left + 274, centerY + 3, 42, 34, "-");
+            drawText(std::to_string(renderDistanceChunks), left + 336, centerY + 16, 2, white, true);
+            drawButton(left + 370, centerY + 3, 42, 34, "+");
+            drawText("DEBUG INFO", left + 28, centerY - 46, 2, white);
+            drawButton(left + 274, centerY - 59, 138, 34, showDebugInfo ? "ON" : "OFF", showDebugInfo);
+            drawText("VIEW BOBBING", left + 28, centerY - 108, 2, white);
+            drawButton(left + 274, centerY - 121, 138, 34, viewBobbing ? "ON" : "OFF", viewBobbing);
             drawButton(centerX - 116, bottom + 17, 232, 38, "BACK", true);
         }
     }
@@ -1597,6 +1648,7 @@ int main() {
     }
 
     glfwMakeContextCurrent(window);
+    loadSettings();
     glfwSetFramebufferSizeCallback(window, framebufferCallback);
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
@@ -1632,6 +1684,9 @@ int main() {
         float dt = static_cast<float>(std::min(now - lastFrame, 0.05));
         lastFrame = now;
         if (uiScreen == UiScreen::Gameplay) worldTime += dt;
+        handSwingTime = std::max(0.0f, handSwingTime - dt * 3.8f);
+        if (uiScreen == UiScreen::Gameplay && playerMoving)
+            walkAnimationTime += dt * (playerSprinting ? 1.7f : 1.0f);
 
         processInput(window, dt);
         processUiMouse(window);
@@ -1654,13 +1709,19 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glm::mat4 projection = glm::perspective(glm::radians(fieldOfView),
-            static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f, 120.0f);
+            static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f,
+            static_cast<float>(renderDistanceChunks * CHUNK_SIZE));
         glm::vec3 front = cameraFront();
-        glm::mat4 view = glm::lookAt(player, player + front, glm::vec3(0,1,0));
+        glm::vec3 cameraPosition = player;
+        if (viewBobbing && uiScreen == UiScreen::Gameplay && playerMoving)
+            cameraPosition.y += std::sin(walkAnimationTime * 10.0f) * 0.045f;
+        glm::mat4 view = glm::lookAt(cameraPosition, cameraPosition + front, glm::vec3(0,1,0));
 
-        visibleChunks = renderWorld(view, projection, player, sky);
-        renderDrops(view, projection, player, sky);
-        renderTarget(view, projection, player, sky);
+        visibleChunks = renderWorld(view, projection, cameraPosition, sky);
+        renderDrops(view, projection, cameraPosition, sky);
+        renderTarget(view, projection, cameraPosition, sky);
+        if (uiScreen == UiScreen::Gameplay && !inventoryOpen)
+            renderFirstPersonHand(view, projection, cameraPosition);
         drawUI();
 
         glfwSwapBuffers(window);
@@ -1690,6 +1751,7 @@ int main() {
     }
 
     if (worldInitialized) saveWorld();
+    saveSettings();
     glDeleteTextures(1, &atlasTexture);
     for (ChunkMesh& chunk : chunks) {
         glDeleteVertexArrays(1, &chunk.vao);
