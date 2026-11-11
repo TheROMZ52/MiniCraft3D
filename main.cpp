@@ -932,12 +932,12 @@ void processUiMouse(GLFWwindow* window) {
             glfwSetWindowShouldClose(window, true);
         }
     } else if (uiScreen == UiScreen::Crafting) {
-        if (inside(centerX - 210, centerY - 174, 420, 34)) {
+        if (inside(centerX - 210, centerY - 220, 420, 34)) {
             uiScreen = UiScreen::Gameplay;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         } else {
             for (std::size_t i = 0; i < mc::Crafting::recipeCount(); ++i) {
-                int rowY = centerY + 112 - static_cast<int>(i) * 36;
+                int rowY = centerY + 155 - static_cast<int>(i) * 30;
                 if (inside(centerX - 190, rowY, 380, 30) && mc::Crafting::craft(inventory, i)) {
                     lastCraftMessage = std::string("Crafted ") + mc::Crafting::recipe(i).name;
                     break;
@@ -1245,6 +1245,9 @@ glm::vec3 uiColor(int id) {
         case 22: return {0.66f,0.43f,0.22f};
         case 23: return {0.72f,0.61f,0.39f};
         case 24: return {0.76f,0.76f,0.79f};
+        case 25: return {0.56f,0.59f,0.64f};
+        case 26: return {0.62f,0.64f,0.67f};
+        case 27: return {0.68f,0.70f,0.74f};
         default: return {0.2f,0.2f,0.2f};
     }
 }
@@ -1267,6 +1270,9 @@ std::string uiItemName(int id) {
         case 22: return "Wooden Axe";
         case 23: return "Wooden Shovel";
         case 24: return "Wooden Sword";
+        case 25: return "Stone Axe";
+        case 26: return "Stone Shovel";
+        case 27: return "Stone Sword";
         default: return "Item";
     }
 }
@@ -1410,16 +1416,16 @@ void drawUI() {
     }
 
     if (uiScreen == UiScreen::Crafting) {
-        drawUiRect(centerX - 230, centerY - 205, 460, 410, panelEdge);
-        drawUiRect(centerX - 226, centerY - 201, 452, 402, panel);
-        drawText("RECIPE BOOK", centerX, centerY + 160, 3, white, true);
+        drawUiRect(centerX - 230, centerY - 250, 460, 500, panelEdge);
+        drawUiRect(centerX - 226, centerY - 246, 452, 492, panel);
+        drawText("RECIPE BOOK", centerX, centerY + 205, 3, white, true);
         for (std::size_t i = 0; i < mc::Crafting::recipeCount(); ++i) {
             const mc::Recipe& recipe = mc::Crafting::recipe(i);
             int rowY = centerY + 112 - static_cast<int>(i) * 36;
             bool available = mc::Crafting::canCraft(inventory, i);
-            drawButton(centerX - 190, rowY, 380, 30, recipe.name, available);
+            drawButton(centerX - 200, rowY, 400, 26, recipe.name, available);
         }
-        drawButton(centerX - 210, centerY - 174, 420, 34, "BACK", true);
+        drawButton(centerX - 210, centerY - 220, 420, 34, "BACK", true);
     }
 
     if (uiScreen == UiScreen::Pause || uiScreen == UiScreen::Settings) {
