@@ -18,9 +18,9 @@
 #include <vector>
 #include <utility>
 
-constexpr int WORLD_X = 64;
+constexpr int WORLD_X = 128;
 constexpr int WORLD_Y = 32;
-constexpr int WORLD_Z = 64;
+constexpr int WORLD_Z = 128;
 constexpr int CHUNK_SIZE = 16;
 constexpr int CHUNKS_X = WORLD_X / CHUNK_SIZE;
 constexpr int CHUNKS_Z = WORLD_Z / CHUNK_SIZE;
@@ -28,7 +28,7 @@ constexpr int CHUNK_COUNT = CHUNKS_X * CHUNKS_Z;
 constexpr int HOTBAR_SIZE = 8;
 
 int world[WORLD_X][WORLD_Y][WORLD_Z]{};
-glm::vec3 player(32.0f, 12.0f, 32.0f);
+glm::vec3 player(64.0f, 12.0f, 64.0f);
 glm::vec3 velocity(0.0f);
 float yaw = -90.0f;
 float pitch = 0.0f;
@@ -356,7 +356,7 @@ void generateWorld() {
         }
     }
 
-    player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
+    player = glm::vec3(64.0f, terrainHeight(64, 64) + 2.2f, 64.0f);
     velocity = glm::vec3(0.0f);
 }
 
@@ -630,16 +630,22 @@ bool loadWorld() {
     std::ifstream file("MiniCraft3D.world", std::ios::binary);
     if (!file) return false;
     Header header{};
-    int loaded[WORLD_X][WORLD_Y][WORLD_Z]{};
-    float playerData[5]{};
     file.read(reinterpret_cast<char*>(&header), sizeof(header));
     bool oldFormat = std::memcmp(header.magic, "MC3D271", 7) == 0;
     bool currentFormat = std::memcmp(header.magic, "MC3D272", 7) == 0;
     bool survivalFormat = std::memcmp(header.magic, "MC3D273", 7) == 0;
     if (!file || (!oldFormat && !currentFormat && !survivalFormat) ||
-        header.width != WORLD_X || header.height != WORLD_Y || header.depth != WORLD_Z)
+        header.width == 0 || header.height == 0 || header.depth == 0 ||
+        header.width > 512 || header.height > 256 || header.depth > 512)
         return false;
-    file.read(reinterpret_cast<char*>(loaded), sizeof(loaded));
+
+    const std::size_t volume = static_cast<std::size_t>(header.width) *
+        header.height * header.depth;
+    if (volume > 64u * 1024u * 1024u) return false;
+    std::vector<int> loaded(volume);
+    float playerData[5]{};
+    file.read(reinterpret_cast<char*>(loaded.data()),
+              static_cast<std::streamsize>(loaded.size() * sizeof(int)));
     file.read(reinterpret_cast<char*>(playerData), sizeof(playerData));
     if (!file || !std::isfinite(playerData[0]) || !std::isfinite(playerData[1]) ||
         !std::isfinite(playerData[2]) || !std::isfinite(playerData[3]) ||
@@ -683,14 +689,32 @@ bool loadWorld() {
         }
     }
 
-    std::memcpy(world, loaded, sizeof(world));
-    player = glm::vec3(playerData[0], playerData[1], playerData[2]);
+    generateWorld();
+    std::fill(&world[0][0][0], &world[0][0][0] + WORLD_X * WORLD_Y * WORLD_Z, 0);
+    const int offsetX = std::max(0, (WORLD_X - static_cast<int>(header.width)) / 2);
+    const int offsetZ = std::max(0, (WORLD_Z - static_cast<int>(header.depth)) / 2);
+    const int copyX = std::min(WORLD_X, static_cast<int>(header.width));
+    const int copyY = std::min(WORLD_Y, static_cast<int>(header.height));
+    const int copyZ = std::min(WORLD_Z, static_cast<int>(header.depth));
+    for (int x = 0; x < copyX; ++x)
+        for (int y = 0; y < copyY; ++y)
+            for (int z = 0; z < copyZ; ++z) {
+                std::size_t index = (static_cast<std::size_t>(x) * header.height + y) *
+                    header.depth + z;
+                world[x + offsetX][y][z + offsetZ] = loaded[index];
+            }
+
+    player = glm::vec3(playerData[0] + offsetX, playerData[1], playerData[2] + offsetZ);
     yaw = playerData[3];
     pitch = std::clamp(playerData[4], -89.0f, 89.0f);
     velocity = glm::vec3(0.0f);
     if (survivalFormat) inventory.replace(loadedInventory, loadedDurability);
     else inventory.replace(loadedInventory);
     playerStats.set(loadedStats[0], loadedStats[1]);
+    for (mc::ItemDrop& drop : loadedDrops) {
+        drop.x += static_cast<float>(offsetX);
+        drop.z += static_cast<float>(offsetZ);
+    }
     itemDrops = std::move(loadedDrops);
     return true;
 }
@@ -803,7 +827,7 @@ void processInput(GLFWwindow* window, float dt) {
     }
     if (player.y < -12.0f) {
         playerStats.damage(mc::PlayerStats::MaxHealth);
-        player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
+        player = glm::vec3(64.0f, terrainHeight(64, 64) + 2.2f, 64.0f);
         velocity = glm::vec3(0.0f);
     }
 }
@@ -1544,7 +1568,7 @@ int main() {
         processBlocks(window, dt);
         if (uiScreen == UiScreen::Gameplay) playerStats.tick(dt, playerMoving, playerSprinting);
         if (!playerStats.alive()) {
-            player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
+            player = glm::vec3(64.0f, terrainHeight(64, 64) + 2.2f, 64.0f);
             velocity = glm::vec3(0.0f);
             playerStats.set(mc::PlayerStats::MaxHealth, 12.0f);
             lastCraftMessage = "Respawned";
@@ -1594,7 +1618,7 @@ int main() {
         }
     }
 
-    saveWorld();
+    if (worldInitialized) saveWorld();
     glDeleteTextures(1, &atlasTexture);
     for (ChunkMesh& chunk : chunks) {
         glDeleteVertexArrays(1, &chunk.vao);
