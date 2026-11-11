@@ -3,6 +3,7 @@ name: Windows build
 on:
   push:
     branches: [main, "feature/**"]
+    tags: ["v*"]
     paths:
       - "main.cpp"
       - "src/**"
@@ -26,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -53,6 +54,12 @@ jobs:
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCraft3D-27.4-Windows
+          name: MiniCraft3D-27.5-Windows
           path: MiniCraft3D.exe
           if-no-files-found: error
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MiniCraft3D.exe
+          generate_release_notes: true
