@@ -768,6 +768,9 @@ bool loadWorld() {
             file.read(reinterpret_cast<char*>(state), sizeof(state));
             if (!file) return false;
             if (itemData[0] <= 0 || itemData[1] <= 0) continue;
+            bool validState = true;
+            for (float value : state) validState = validState && std::isfinite(value);
+            if (!validState) continue;
             mc::ItemDrop drop;
             drop.itemId = itemData[0];
             drop.count = itemData[1];
@@ -797,7 +800,10 @@ bool loadWorld() {
                 world[x + offsetX][y][z + offsetZ] = loaded[index];
             }
 
-    player = glm::vec3(playerData[0] + offsetX, playerData[1], playerData[2] + offsetZ);
+    player = glm::vec3(
+        std::clamp(playerData[0] + offsetX, 1.0f, static_cast<float>(WORLD_X - 2)),
+        std::clamp(playerData[1], 1.0f, static_cast<float>(WORLD_Y - 1)),
+        std::clamp(playerData[2] + offsetZ, 1.0f, static_cast<float>(WORLD_Z - 2)));
     yaw = playerData[3];
     pitch = std::clamp(playerData[4], -89.0f, 89.0f);
     velocity = glm::vec3(0.0f);
@@ -859,6 +865,10 @@ void startSelectedWorld(const std::string& path, bool createNew, GLFWwindow* win
     for (ChunkMesh& chunk : chunks) chunk.dirty = true;
     rebuildDirtyChunks();
     worldInitialized = true;
+    leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    inventoryClickWasDown = leftWasDown;
+    uiClickWasDown = leftWasDown;
     uiScreen = UiScreen::Gameplay;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     firstMouse = true;
