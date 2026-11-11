@@ -1312,8 +1312,14 @@ int renderWorld(const glm::mat4& view, const glm::mat4& projection,
     auto planes = extractFrustum(projection * view);
     int visible = 0;
 
+    const int centerChunkX = static_cast<int>(std::floor(camera.x / CHUNK_SIZE));
+    const int centerChunkZ = static_cast<int>(std::floor(camera.z / CHUNK_SIZE));
+    const int renderDistanceSquared = renderDistanceChunks * renderDistanceChunks;
     for (int cz = 0; cz < CHUNKS_Z; ++cz) {
         for (int cx = 0; cx < CHUNKS_X; ++cx) {
+            const int dx = cx - centerChunkX;
+            const int dz = cz - centerChunkZ;
+            if (dx * dx + dz * dz > renderDistanceSquared) continue;
             ChunkMesh& chunk = chunks[chunkIndex(cx, cz)];
             if (!chunk.vertexCount || !chunkVisible(planes, cx, cz)) continue;
             glm::mat4 model = glm::translate(glm::mat4(1.0f),
