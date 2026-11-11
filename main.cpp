@@ -774,6 +774,7 @@ bool loadWorld() {
         }
     }
 
+    std::memset(world, 0, sizeof(world));
     generateWorld();
     const int offsetX = std::max(0, (WORLD_X - static_cast<int>(header.width)) / 2);
     const int offsetZ = std::max(0, (WORLD_Z - static_cast<int>(header.depth)) / 2);
