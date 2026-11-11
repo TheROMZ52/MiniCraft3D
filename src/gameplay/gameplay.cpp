@@ -11,7 +11,10 @@ constexpr ItemDefinition Definitions[] = {
     {21, "Stone Pickaxe", ToolType::Pickaxe, 131, 4.0f},
     {22, "Wooden Axe", ToolType::Axe, 59, 2.0f},
     {23, "Wooden Shovel", ToolType::Shovel, 59, 2.0f},
-    {24, "Wooden Sword", ToolType::Sword, 59, 1.0f}
+    {24, "Wooden Sword", ToolType::Sword, 59, 1.0f},
+    {25, "Stone Axe", ToolType::Axe, 131, 5.0f},
+    {26, "Stone Shovel", ToolType::Shovel, 131, 4.0f},
+    {27, "Stone Sword", ToolType::Sword, 131, 1.5f}
 };
 
 constexpr Recipe Recipes[] = {
@@ -22,7 +25,10 @@ constexpr Recipe Recipes[] = {
     {{{{3, 3}, {10, 2}, {}}}, 2, 21, 1, "Stone pickaxe"},
     {{{{9, 3}, {10, 2}, {}}}, 2, 22, 1, "Wooden axe"},
     {{{{9, 1}, {10, 2}, {}}}, 2, 23, 1, "Wooden shovel"},
-    {{{{9, 2}, {10, 1}, {}}}, 2, 24, 1, "Wooden sword"}
+    {{{{9, 2}, {10, 1}, {}}}, 2, 24, 1, "Wooden sword"},
+    {{{{3, 3}, {10, 2}, {}}}, 2, 25, 1, "Stone axe"},
+    {{{{3, 1}, {10, 2}, {}}}, 2, 26, 1, "Stone shovel"},
+    {{{{3, 2}, {10, 1}, {}}}, 2, 27, 1, "Stone sword"}
 };
 }
 
