@@ -10,6 +10,10 @@ on:
       - "tests/**"
       - "build.bat"
       - "README.md"
+      - "textures/**"
+      - "update.bat"
+      - "update.ps1"
+      - ".gitignore"
       - ".github/workflows/windows-build.yml"
   pull_request:
     branches: [main]
@@ -61,5 +65,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: MiniCraft3D.exe
+          files: |
+            MiniCraft3D.exe
+            textures/atlas.ppm
           generate_release_notes: true
