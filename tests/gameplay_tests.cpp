@@ -67,6 +67,28 @@ int main() {
     assert(toolSlot >= 0);
     assert(craftedTools.durability(static_cast<std::size_t>(toolSlot)) == 59);
 
+    mc::Inventory stoneAxe;
+    assert(stoneAxe.addItem(3, 3) == 0);
+    assert(stoneAxe.addItem(10, 2) == 0);
+    assert(mc::Crafting::craft(stoneAxe, 8));
+    assert(stoneAxe.countItem(25) == 1);
+    assert(mc::Items::canHarvest(25, 4));
+    assert(mc::Items::maxDurability(25) == 131);
+
+    mc::Inventory stoneShovel;
+    assert(stoneShovel.addItem(3, 1) == 0);
+    assert(stoneShovel.addItem(10, 2) == 0);
+    assert(mc::Crafting::craft(stoneShovel, 9));
+    assert(stoneShovel.countItem(26) == 1);
+    assert(mc::Items::canHarvest(26, 6));
+
+    mc::Inventory stoneSword;
+    assert(stoneSword.addItem(3, 2) == 0);
+    assert(stoneSword.addItem(10, 1) == 0);
+    assert(mc::Crafting::craft(stoneSword, 10));
+    assert(stoneSword.countItem(27) == 1);
+    assert(mc::Items::toolType(27) == mc::ToolType::Sword);
+
     mc::PlayerStats stats;
     stats.damage(6.0f);
     assert(stats.health() == 14.0f);
