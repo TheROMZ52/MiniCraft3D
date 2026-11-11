@@ -52,6 +52,11 @@ jobs:
         run: |
           g++ tests/gameplay_tests.cpp src/gameplay/gameplay.cpp -o gameplay-tests.exe -std=c++17 -Wall -Wextra
           ./gameplay-tests.exe
+      - name: Test infinite chunk world
+        shell: msys2 {0}
+        run: |
+          g++ tests/world_tests.cpp -o world-tests.exe -std=c++17 -Wall -Wextra
+          ./world-tests.exe
       - name: Compile game
         shell: msys2 {0}
         run: g++ main.cpp src/gameplay/gameplay.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
