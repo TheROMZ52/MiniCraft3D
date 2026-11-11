@@ -845,6 +845,7 @@ void refreshWorldList() {
 void startSelectedWorld(const std::string& path, bool createNew, GLFWwindow* window) {
     currentWorldPath = path;
     if (createNew) {
+        std::memset(world, 0, sizeof(world));
         inventory.clear();
         itemDrops.clear();
         playerStats.set(mc::PlayerStats::MaxHealth, mc::PlayerStats::MaxHunger);
@@ -1036,7 +1037,7 @@ void processUiMouse(GLFWwindow* window) {
         } else {
             for (std::size_t i = 0; i < mc::Crafting::recipeCount(); ++i) {
                 int rowY = centerY + 155 - static_cast<int>(i) * 30;
-                if (inside(centerX - 190, rowY, 380, 30) && mc::Crafting::craft(inventory, i)) {
+                if (inside(centerX - 200, rowY, 400, 26) && mc::Crafting::craft(inventory, i)) {
                     lastCraftMessage = std::string("Crafted ") + mc::Crafting::recipe(i).name;
                     break;
                 }
