@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <filesystem>
+#include <algorithm>
 
 int main() {
     using namespace mc::world;
@@ -41,6 +42,27 @@ int main() {
     assert(!visible.empty());
     for (const auto& pos : visible)
         assert(pos.x * pos.x + pos.z * pos.z <= 4);
+
+    world.updateStreaming(0, 0, 3);
+    assert(world.meshDirty({0, 0}));
+    world.markMeshClean({0, 0});
+    assert(!world.meshDirty({0, 0}));
+    world.markMeshClean({1, 0});
+    world.markMeshClean({0, 0});
+    assert(world.setBlock(15, surface, 0, 9));
+    assert(world.meshDirty({0, 0}));
+    assert(world.meshDirty({1, 0}));
+    world.markMeshClean({0, 0});
+    world.markMeshClean({-1, 0});
+    assert(world.setBlock(0, surface, 0, 9));
+    assert(world.meshDirty({0, 0}));
+    assert(world.meshDirty({-1, 0}));
+
+    const auto loaded = world.loadedChunkPositions();
+    assert(loaded.size() == world.loadedCount());
+    assert(std::is_sorted(loaded.begin(), loaded.end(), [](const ChunkPos& a, const ChunkPos& b) {
+        return a.z == b.z ? a.x < b.x : a.z < b.z;
+    }));
 
     world.updateStreaming(1024, -1024, 2);
     assert(world.loadedCount() <= 41);
