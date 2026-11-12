@@ -34,6 +34,14 @@ int main() {
     assert(world.getBlock(-1, surface + 1, -1) == 9);
     assert(!world.setBlock(-1, surface + 1, -1, 9));
 
+    InfiniteWorld streaming(directory / "streaming");
+    streaming.updateStreaming(0, 0, 2);
+    assert(streaming.isLoaded({2, 0}));
+    assert(!streaming.isLoaded({3, 0}));
+    streaming.markMeshClean({2, 0});
+    streaming.getBlock(48, surface, 0);
+    assert(streaming.meshDirty({2, 0}));
+
     world.updateStreaming(0, 0, 3);
     assert(world.isLoaded({0, 0}));
     assert(world.isLoaded({-1, -1}));
