@@ -1585,7 +1585,7 @@ void drawUI() {
         drawButton(centerX - 130, centerY + 48, 260, 42, "SINGLEPLAYER", true);
         drawButton(centerX - 130, centerY - 4, 260, 42, "SETTINGS");
         drawButton(centerX - 130, centerY - 56, 260, 42, "QUIT GAME");
-        drawText("27.5 EXPANSION", centerX, centerY - 145, 1, muted, true);
+        drawText("27.6 EXPANSION", centerX, centerY - 145, 1, muted, true);
     }
 
     if (uiScreen == UiScreen::WorldSelect) {
@@ -1782,7 +1782,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.5", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.6", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -1876,7 +1876,7 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 27.5";
+            std::string title = "MiniCraft3D 27.6";
             if (showDebugInfo) {
                 title += " | " + std::to_string(static_cast<int>(fps)) + " FPS | Chunks " +
                     std::to_string(visibleChunks) + "/" + std::to_string(infiniteWorld.loadedCount()) +
