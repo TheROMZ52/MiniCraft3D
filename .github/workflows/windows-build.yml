@@ -63,7 +63,7 @@ jobs:
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCraft3D-27.5-Windows
+          name: MiniCraft3D-27.6-Windows
           path: MiniCraft3D.exe
           if-no-files-found: error
       - name: Publish GitHub release
