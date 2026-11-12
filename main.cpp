@@ -867,6 +867,12 @@ void refreshWorldList() {
 
 void startSelectedWorld(const std::string& path, bool createNew, GLFWwindow* window) {
     currentWorldPath = path;
+    infiniteWorld = mc::world::InfiniteWorld(currentWorldPath + ".chunks");
+    for (auto& entry : streamedMeshes) {
+        glDeleteVertexArrays(1, &entry.second.vao);
+        glDeleteBuffers(1, &entry.second.vbo);
+    }
+    streamedMeshes.clear();
     if (createNew) {
         std::memset(world, 0, sizeof(world));
         inventory.clear();
@@ -1164,7 +1170,7 @@ void processBlocks(GLFWwindow* window, float dt) {
             miningTarget = hit;
             miningProgress = 0.0f;
         }
-        int brokenBlock = world[hit.x][hit.y][hit.z];
+        int brokenBlock = infiniteWorld.getBlock(hit.x, hit.y, hit.z);
         int heldItem = inventory.slot(static_cast<std::size_t>(selectedBlock - 1)).itemId;
         float hardness = 1.0f;
         if (brokenBlock == 3) hardness = 2.0f;
@@ -1179,7 +1185,7 @@ void processBlocks(GLFWwindow* window, float dt) {
         if (miningProgress >= 1.0f) {
             bool requiresPickaxe = brokenBlock == 3 || brokenBlock == 8;
             bool harvestable = !requiresPickaxe || mc::Items::canHarvest(heldItem, brokenBlock);
-            world[hit.x][hit.y][hit.z] = 0;
+            infiniteWorld.setBlock(hit.x, hit.y, hit.z, 0);
             if (harvestable) {
                 mc::ItemDrop drop;
                 drop.itemId = brokenBlock;
@@ -1205,15 +1211,14 @@ void processBlocks(GLFWwindow* window, float dt) {
 
     const mc::ItemStack held = inventory.slot(static_cast<std::size_t>(selectedBlock - 1));
     if (right && !rightWasDown && found && held.itemId >= 1 && held.itemId <= 9 &&
-        held.count > 0 && insideWorld(previous.x, previous.y, previous.z) &&
-        world[previous.x][previous.y][previous.z] == 0) {
-        world[previous.x][previous.y][previous.z] = held.itemId;
-        if (collides(player)) world[previous.x][previous.y][previous.z] = 0;
+        held.count > 0 && infiniteWorld.getBlock(previous.x, previous.y, previous.z) == 0) {
+        infiniteWorld.setBlock(previous.x, previous.y, previous.z, static_cast<std::uint8_t>(held.itemId));
+        if (collides(player)) infiniteWorld.setBlock(previous.x, previous.y, previous.z, 0);
         else if (inventory.removeItem(held.itemId, 1)) {
             markChunkDirty(previous.x, previous.z);
             changed = true;
         } else {
-            world[previous.x][previous.y][previous.z] = 0;
+            infiniteWorld.setBlock(previous.x, previous.y, previous.z, 0);
         }
     }
 
@@ -1292,7 +1297,7 @@ std::array<Plane, 6> extractFrustum(const glm::mat4& matrix) {
 
 bool chunkVisible(const std::array<Plane, 6>& planes, int cx, int cz) {
     glm::vec3 minimum(cx * CHUNK_SIZE - 0.5f, -0.5f, cz * CHUNK_SIZE - 0.5f);
-    glm::vec3 maximum((cx + 1) * CHUNK_SIZE - 0.5f, WORLD_Y - 0.5f,
+    glm::vec3 maximum((cx + 1) * CHUNK_SIZE - 0.5f, mc::world::WorldHeight - 0.5f,
                       (cz + 1) * CHUNK_SIZE - 0.5f);
     for (const Plane& plane : planes) {
         glm::vec3 positive(
@@ -1328,24 +1333,19 @@ int renderWorld(const glm::mat4& view, const glm::mat4& projection,
     glBindTexture(GL_TEXTURE_2D, atlasTexture);
     auto planes = extractFrustum(projection * view);
     int visible = 0;
-
-    const int centerChunkX = static_cast<int>(std::floor(camera.x / CHUNK_SIZE));
-    const int centerChunkZ = static_cast<int>(std::floor(camera.z / CHUNK_SIZE));
-    const int renderDistanceSquared = renderDistanceChunks * renderDistanceChunks;
-    for (int cz = 0; cz < CHUNKS_Z; ++cz) {
-        for (int cx = 0; cx < CHUNKS_X; ++cx) {
-            const int dx = cx - centerChunkX;
-            const int dz = cz - centerChunkZ;
-            if (dx * dx + dz * dz > renderDistanceSquared) continue;
-            ChunkMesh& chunk = chunks[chunkIndex(cx, cz)];
-            if (!chunk.vertexCount || !chunkVisible(planes, cx, cz)) continue;
-            glm::mat4 model = glm::translate(glm::mat4(1.0f),
-                glm::vec3(cx * CHUNK_SIZE, 0.0f, cz * CHUNK_SIZE));
-            glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
-            glBindVertexArray(chunk.vao);
-            glDrawArrays(GL_TRIANGLES, 0, chunk.vertexCount);
-            ++visible;
-        }
+    const auto positions = infiniteWorld.visibleChunks(
+        static_cast<int>(std::floor(camera.x)), static_cast<int>(std::floor(camera.z)), renderDistanceChunks);
+    for (const auto& position : positions) {
+        auto found = streamedMeshes.find(position);
+        if (found == streamedMeshes.end()) continue;
+        ChunkMesh& mesh = found->second;
+        if (!mesh.vertexCount || !chunkVisible(planes, position.x, position.z)) continue;
+        glm::mat4 model = glm::translate(glm::mat4(1.0f),
+            glm::vec3(position.x * CHUNK_SIZE, 0.0f, position.z * CHUNK_SIZE));
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+        glBindVertexArray(mesh.vao);
+        glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+        ++visible;
     }
     return visible;
 }
@@ -1819,6 +1819,7 @@ int main() {
         processUiMouse(window);
         processInventoryMouse(window);
         processBlocks(window, dt);
+        if (uiScreen == UiScreen::Gameplay) rebuildDirtyChunks();
         if (uiScreen == UiScreen::Gameplay) playerStats.tick(dt, playerMoving, playerSprinting);
         if (!playerStats.alive()) {
             player = glm::vec3(64.0f, terrainHeight(64, 64) + 2.2f, 64.0f);
@@ -1863,7 +1864,7 @@ int main() {
             std::string title = "MiniCraft3D 27.5";
             if (showDebugInfo) {
                 title += " | " + std::to_string(static_cast<int>(fps)) + " FPS | Chunks " +
-                    std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
+                    std::to_string(visibleChunks) + "/" + std::to_string(infiniteWorld.loadedCount()) +
                     " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
                     std::to_string(static_cast<int>(player.y)) + "," +
                     std::to_string(static_cast<int>(player.z));
@@ -1878,6 +1879,11 @@ int main() {
     }
 
     if (worldInitialized) saveWorld();
+    for (auto& entry : streamedMeshes) {
+        glDeleteVertexArrays(1, &entry.second.vao);
+        glDeleteBuffers(1, &entry.second.vbo);
+    }
+    streamedMeshes.clear();
     saveSettings();
     glDeleteTextures(1, &atlasTexture);
     for (ChunkMesh& chunk : chunks) {
