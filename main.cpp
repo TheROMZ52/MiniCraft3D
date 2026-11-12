@@ -6,6 +6,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include "src/gameplay/gameplay.hpp"
+#include "src/world/infinite_world.hpp"
+#include <unordered_map>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -98,6 +100,8 @@ struct Plane {
 };
 
 std::array<ChunkMesh, CHUNK_COUNT> chunks;
+mc::world::InfiniteWorld infiniteWorld;
+std::unordered_map<mc::world::ChunkPos, ChunkMesh, mc::world::ChunkPosHash> streamedMeshes;
 GLuint cubeVAO = 0;
 GLuint cubeVBO = 0;
 GLuint shaderProgram = 0;
@@ -385,63 +389,21 @@ bool insideWorld(int x, int y, int z) {
 }
 
 void generateWorld() {
-    for (int x = 0; x < WORLD_X; ++x) {
-        for (int z = 0; z < WORLD_Z; ++z) {
-            int top = terrainHeight(x, z);
-            int biome = biomeAt(x, z);
-            for (int y = 0; y <= top; ++y) {
-                if (y == top) {
-                    if (biome == 1) world[x][y][z] = 6;
-                    else if (biome == 2) world[x][y][z] = 7;
-                    else world[x][y][z] = 1;
-                } else if (y >= top - 3) {
-                    world[x][y][z] = biome == 1 ? 6 : 2;
-                } else {
-                    float caveA = std::sin(x * 0.23f + y * 0.37f) * std::cos(z * 0.19f - y * 0.28f);
-                    float caveB = std::sin((x + z) * 0.12f + y * 0.31f);
-                    bool cave = y > 3 && y < top - 3 && caveA + caveB > 0.98f;
-                    if (cave) world[x][y][z] = 0;
-                    else if (y < top - 5 && hashNoise(x * 3 + z, y * 7, 413) % 181 == 0) world[x][y][z] = 8;
-                    else world[x][y][z] = 3;
-                }
-            }
-        }
-    }
-
-    for (int x = 5; x < WORLD_X - 5; x += 5) {
-        for (int z = 5; z < WORLD_Z - 5; z += 6) {
-            int biome = biomeAt(x, z);
-            uint32_t roll = hashNoise(x, z, 77) % 100;
-            if (biome == 1 || roll > (biome == 3 ? 62u : 30u)) continue;
-            int ground = terrainHeight(x, z);
-            if (world[x][ground][z] != 1 || ground + 6 >= WORLD_Y) continue;
-            int trunk = biome == 3 ? 4 : 3;
-            for (int y = 1; y <= trunk; ++y) world[x][ground + y][z] = 4;
-            for (int dx = -2; dx <= 2; ++dx) {
-                for (int dz = -2; dz <= 2; ++dz) {
-                    for (int dy = trunk - 1; dy <= trunk + 2; ++dy) {
-                        int xx = x + dx, yy = ground + dy, zz = z + dz;
-                        if (!insideWorld(xx, yy, zz)) continue;
-                        if (std::abs(dx) + std::abs(dz) + std::abs(dy - (trunk + 1)) <= 4 &&
-                            world[xx][yy][zz] == 0) world[xx][yy][zz] = 5;
-                    }
-                }
-            }
-        }
-    }
-
-    player = glm::vec3(64.0f, terrainHeight(64, 64) + 2.2f, 64.0f);
+    std::memset(world, 0, sizeof(world));
+    streamedMeshes.clear();
+    infiniteWorld.updateStreaming(0, 0, renderDistanceChunks);
+    player = glm::vec3(0.0f, mc::world::InfiniteWorld::heightAt(0, 0) + 2.2f, 0.0f);
     velocity = glm::vec3(0.0f);
 }
 
 bool meshSolidAt(int x, int y, int z) {
-    return insideWorld(x, y, z) && world[x][y][z] != 0;
+    return infiniteWorld.getBlock(x, y, z) != 0;
 }
 
 bool solidAt(int x, int y, int z) {
-    if (x < 0 || x >= WORLD_X || z < 0 || z >= WORLD_Z || y < 0) return true;
-    if (y >= WORLD_Y) return false;
-    return world[x][y][z] != 0;
+    if (y < 0) return true;
+    if (y >= mc::world::WorldHeight) return false;
+    return infiniteWorld.getBlock(x, y, z) != 0;
 }
 
 bool collides(glm::vec3 p) {
@@ -505,7 +467,7 @@ bool raycast(glm::ivec3& hit, glm::ivec3& previous) {
         );
         if (cell == lastCell) continue;
         lastCell = cell;
-        if (insideWorld(cell.x, cell.y, cell.z) && world[cell.x][cell.y][cell.z] != 0) {
+        if (infiniteWorld.getBlock(cell.x, cell.y, cell.z) != 0) {
             hit = cell;
             glm::vec3 before = player + direction * std::max(0.0f, distance - 0.03f);
             previous = glm::ivec3(
@@ -586,13 +548,9 @@ int chunkIndex(int cx, int cz) {
 }
 
 void markChunkDirty(int x, int z) {
-    int cx = x / CHUNK_SIZE;
-    int cz = z / CHUNK_SIZE;
-    chunks[chunkIndex(cx, cz)].dirty = true;
-    if (x % CHUNK_SIZE == 0 && cx > 0) chunks[chunkIndex(cx - 1, cz)].dirty = true;
-    if (x % CHUNK_SIZE == CHUNK_SIZE - 1 && cx + 1 < CHUNKS_X) chunks[chunkIndex(cx + 1, cz)].dirty = true;
-    if (z % CHUNK_SIZE == 0 && cz > 0) chunks[chunkIndex(cx, cz - 1)].dirty = true;
-    if (z % CHUNK_SIZE == CHUNK_SIZE - 1 && cz + 1 < CHUNKS_Z) chunks[chunkIndex(cx, cz + 1)].dirty = true;
+    const auto position = mc::world::InfiniteWorld::chunkOf(x, z);
+    auto found = streamedMeshes.find(position);
+    if (found != streamedMeshes.end()) found->second.dirty = true;
 }
 
 void rebuildChunk(int cx, int cz) {
@@ -627,10 +585,69 @@ void rebuildChunk(int cx, int cz) {
     chunk.dirty = false;
 }
 
+void rebuildStreamedChunk(mc::world::ChunkPos position) {
+    auto [it, inserted] = streamedMeshes.try_emplace(position);
+    ChunkMesh& mesh = it->second;
+    if (inserted) {
+        glGenVertexArrays(1, &mesh.vao);
+        glGenBuffers(1, &mesh.vbo);
+        glBindVertexArray(mesh.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, x)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, nx)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, u)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, ao)));
+    }
+    if (!mesh.dirty && !infiniteWorld.meshDirty(position)) return;
+    std::vector<Vertex> vertices;
+    vertices.reserve(24000);
+    const int originX = position.x * CHUNK_SIZE;
+    const int originZ = position.z * CHUNK_SIZE;
+    const int neighbor[6][3] = {{0,0,1},{0,0,-1},{0,1,0},{0,-1,0},{1,0,0},{-1,0,0}};
+    for (int x = 0; x < CHUNK_SIZE; ++x) {
+        for (int y = 0; y < mc::world::WorldHeight; ++y) {
+            for (int z = 0; z < CHUNK_SIZE; ++z) {
+                const int wx = originX + x;
+                const int wz = originZ + z;
+                const int id = infiniteWorld.getBlock(wx, y, wz);
+                if (!id) continue;
+                for (int face = 0; face < 6; ++face) {
+                    const int nx = wx + neighbor[face][0];
+                    const int ny = y + neighbor[face][1];
+                    const int nz = wz + neighbor[face][2];
+                    if (!meshSolidAt(nx, ny, nz))
+                        addFace(vertices, x, y, z, wx, wz, id, face);
+                }
+            }
+        }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
+        vertices.empty() ? nullptr : vertices.data(), GL_DYNAMIC_DRAW);
+    mesh.vertexCount = static_cast<GLsizei>(vertices.size());
+    mesh.dirty = false;
+    infiniteWorld.markMeshClean(position);
+}
+
 void rebuildDirtyChunks() {
-    for (int cz = 0; cz < CHUNKS_Z; ++cz)
-        for (int cx = 0; cx < CHUNKS_X; ++cx)
-            if (chunks[chunkIndex(cx, cz)].dirty) rebuildChunk(cx, cz);
+    infiniteWorld.updateStreaming(static_cast<int>(std::floor(player.x)),
+        static_cast<int>(std::floor(player.z)), renderDistanceChunks);
+    for (auto it = streamedMeshes.begin(); it != streamedMeshes.end();) {
+        if (!infiniteWorld.isLoaded(it->first)) {
+            glDeleteVertexArrays(1, &it->second.vao);
+            glDeleteBuffers(1, &it->second.vbo);
+            it = streamedMeshes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const auto& position : infiniteWorld.loadedChunkPositions())
+        rebuildStreamedChunk(position);
 }
 
 void setupGeometry() {
