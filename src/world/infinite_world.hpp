@@ -289,7 +289,12 @@ private:
         if (found != chunks_.end()) return found->second;
         Chunk chunk;
         if (!loadChunk(position, chunk)) chunk = generate(position);
-        return chunks_.emplace(position, std::move(chunk)).first->second;
+        auto inserted = chunks_.emplace(position, std::move(chunk)).first;
+        markNeighborDirty({position.x - 1, position.z});
+        markNeighborDirty({position.x + 1, position.z});
+        markNeighborDirty({position.x, position.z - 1});
+        markNeighborDirty({position.x, position.z + 1});
+        return inserted->second;
     }
 
     void markNeighborDirty(ChunkPos position) {
