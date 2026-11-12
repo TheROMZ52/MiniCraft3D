@@ -192,6 +192,26 @@ public:
         return chunks_.find(position) != chunks_.end();
     }
 
+    bool meshDirty(ChunkPos position) const noexcept {
+        const auto found = chunks_.find(position);
+        return found != chunks_.end() && found->second.meshDirty;
+    }
+
+    void markMeshClean(ChunkPos position) noexcept {
+        const auto found = chunks_.find(position);
+        if (found != chunks_.end()) found->second.meshDirty = false;
+    }
+
+    std::vector<ChunkPos> loadedChunkPositions() const {
+        std::vector<ChunkPos> result;
+        result.reserve(chunks_.size());
+        for (const auto& entry : chunks_) result.push_back(entry.first);
+        std::sort(result.begin(), result.end(), [](const ChunkPos& a, const ChunkPos& b) {
+            return a.z == b.z ? a.x < b.x : a.z < b.z;
+        });
+        return result;
+    }
+
 private:
     std::filesystem::path saveDirectory_;
     std::unordered_map<ChunkPos, Chunk, ChunkPosHash> chunks_;
