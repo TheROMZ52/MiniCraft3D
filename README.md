@@ -1,31 +1,33 @@
-# MiniCraft3D 27.5
+# MiniCraft3D 27.6
 
 A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core. Built from scratch without a game engine.
 
 ## Gameplay
 
-- Main menu with Singleplayer, world selection, multiple save slots, Settings and Quit
-- 32-slot inventory and 8-slot hotbar
-- Interactive recipe book (R) and quick crafting (C)
-- Wooden and stone pickaxes, axes, shovels and swords
-- Tool durability, mining progression and harvest requirements
-- Health and hunger, sprint exhaustion, regeneration and starvation
-- Block drops, pickup, placement and persistent world saves
+- Main menu, world selection, multiple save slots and Settings
+- 32-slot inventory, 8-slot hotbar and interactive recipe book
+- Wooden and stone tools, durability, mining progression and harvest requirements
+- Health, hunger, sprint exhaustion, regeneration and starvation
+- Block drops, pickup, placement and persistent chunk saves
 - First-person hand swing and walk bobbing animations
 
-## World and rendering
+## Infinite world and rendering
 
-- 128 x 32 x 128 procedural voxel world (four times the previous horizontal area)
-- Up to five saved worlds are shown in the world selector; new worlds receive unique save files
-- 64 independently meshed chunks with frustum culling and hidden-face removal
+- Procedurally generated world with no horizontal world boundary
+- 16 x 16 chunks with a 64-block vertical range
+- Dynamic chunk streaming around the player, including negative world coordinates
+- Automatic chunk unloading outside the active streaming radius
+- Render distance setting from 4 to 16 chunks, radial visibility filtering and frustum culling
+- OpenGL mesh generation per loaded chunk with hidden-face removal
+- Neighbor mesh invalidation when blocks change or adjacent chunks stream in
 - Vertex ambient occlusion, animated daylight and distance fog
-- Built-in pixel-art texture atlas with optional external PPM atlas
 - Plains, forest, desert and snowy regions, caves, ores and trees
-- Legacy 27.1, 27.2 and 27.3 saves are migrated into the expanded world
+- Chunk data saved separately from world/player metadata
+- Legacy 27.1, 27.2 and 27.3 saves are imported into the chunk-based world format
 
 ## Texture atlas
 
-The game looks for `textures/atlas.ppm` at startup. If it is missing or invalid, the built-in atlas is used.
+The game loads `textures/atlas.ppm` at startup. If it is missing or invalid, the built-in atlas is used.
 
 The external atlas must be a PPM P3 or P6 image exactly **160 x 16 pixels**, containing ten horizontal 16 x 16 tiles in this order:
 
@@ -42,7 +44,7 @@ The external atlas must be a PPM P3 or P6 image exactly **160 x 16 pixels**, con
 | 8 | Grass side |
 | 9 | Planks |
 
-Keep each tile 16 x 16. Use nearest-neighbor filtering and avoid adding gaps between tiles.
+Keep each tile 16 x 16. The supplied atlas uses pixel-art shading and nearest-neighbor filtering; avoid gaps between tiles.
 
 ## Settings
 
@@ -61,11 +63,9 @@ Install packages in the MSYS2 UCRT64 terminal:
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glew mingw-w64-ucrt-x86_64-glm
 ```
 
-## Build
+## Build and update
 
 Run `build.bat` from the project directory, then launch `MiniCraft3D.exe`.
-
-## Update
 
 Run `update.bat` to download the executable from the latest published GitHub release. Releases are published when a `v*` tag is pushed.
 
@@ -90,4 +90,4 @@ Run `update.bat` to download the executable from the latest published GitHub rel
 
 ## Tests
 
-GitHub Actions runs standalone inventory, crafting, tool durability, harvest requirement and survival-stat tests before compiling the Windows executable.
+GitHub Actions runs gameplay-system tests, infinite-world coordinate and terrain tests, cross-chunk mesh invalidation tests, streaming/unloading tests and chunk persistence tests before compiling the Windows executable.
