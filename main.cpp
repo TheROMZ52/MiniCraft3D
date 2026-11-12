@@ -726,8 +726,11 @@ void saveWorld() {
         file.write(reinterpret_cast<const char*>(itemData), sizeof(itemData));
         file.write(reinterpret_cast<const char*>(state), sizeof(state));
     }
-    if (file) std::cout << "World saved: MiniCraft3D.world\\n";
-    else std::cerr << "World save failed.\n";
+    file.close();
+    if (file && infiniteWorld.saveAll())
+        std::cout << "World saved: " << currentWorldPath << "\n";
+    else
+        std::cerr << "World save failed.\n";
 }
 
 bool loadWorld() {
