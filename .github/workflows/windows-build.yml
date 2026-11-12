@@ -2,16 +2,27 @@ name: Windows build
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
+    tags: ["v*"]
     paths:
       - "main.cpp"
+      - "src/**"
+      - "tests/**"
       - "build.bat"
+      - "README.md"
+      - "textures/**"
+      - "update.bat"
+      - "update.ps1"
+      - ".gitignore"
       - ".github/workflows/windows-build.yml"
   pull_request:
     branches: [main]
     paths:
       - "main.cpp"
+      - "src/**"
+      - "tests/**"
       - "build.bat"
+      - "README.md"
       - ".github/workflows/windows-build.yml"
   workflow_dispatch:
 
@@ -20,7 +31,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -36,12 +47,30 @@ jobs:
             mingw-w64-ucrt-x86_64-glfw
             mingw-w64-ucrt-x86_64-glew
             mingw-w64-ucrt-x86_64-glm
-      - name: Compile
+      - name: Test gameplay systems
         shell: msys2 {0}
-        run: g++ main.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
+        run: |
+          g++ tests/gameplay_tests.cpp src/gameplay/gameplay.cpp -o gameplay-tests.exe -std=c++17 -Wall -Wextra
+          ./gameplay-tests.exe
+      - name: Test infinite chunk world
+        shell: msys2 {0}
+        run: |
+          g++ tests/world_tests.cpp -o world-tests.exe -std=c++17 -Wall -Wextra
+          ./world-tests.exe
+      - name: Compile game
+        shell: msys2 {0}
+        run: g++ main.cpp src/gameplay/gameplay.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCraft3D-27.1-Windows
+          name: MiniCraft3D-27.6-Windows
           path: MiniCraft3D.exe
           if-no-files-found: error
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            MiniCraft3D.exe
+            textures/atlas.ppm
+          generate_release_notes: true

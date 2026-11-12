@@ -5,20 +5,26 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include "src/gameplay/gameplay.hpp"
+#include "src/world/infinite_world.hpp"
+#include <unordered_map>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cctype>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
+#include <utility>
 
-constexpr int WORLD_X = 64;
+constexpr int WORLD_X = 128;
 constexpr int WORLD_Y = 32;
-constexpr int WORLD_Z = 64;
+constexpr int WORLD_Z = 128;
 constexpr int CHUNK_SIZE = 16;
 constexpr int CHUNKS_X = WORLD_X / CHUNK_SIZE;
 constexpr int CHUNKS_Z = WORLD_Z / CHUNK_SIZE;
@@ -26,7 +32,7 @@ constexpr int CHUNK_COUNT = CHUNKS_X * CHUNKS_Z;
 constexpr int HOTBAR_SIZE = 8;
 
 int world[WORLD_X][WORLD_Y][WORLD_Z]{};
-glm::vec3 player(32.0f, 12.0f, 32.0f);
+glm::vec3 player(64.0f, 12.0f, 64.0f);
 glm::vec3 velocity(0.0f);
 float yaw = -90.0f;
 float pitch = 0.0f;
@@ -39,6 +45,37 @@ bool rightWasDown = false;
 bool saveWasDown = false;
 bool loadWasDown = false;
 int selectedBlock = 1;
+mc::Inventory inventory;
+mc::PlayerStats playerStats;
+std::vector<mc::ItemDrop> itemDrops;
+bool playerMoving = false;
+bool playerSprinting = false;
+glm::ivec3 miningTarget(-999);
+float miningProgress = 0.0f;
+bool inventoryOpen = false;
+bool inventoryWasDown = false;
+bool craftWasDown = false;
+bool inventoryClickWasDown = false;
+bool uiClickWasDown = false;
+bool craftingWasDown = false;
+bool worldInitialized = false;
+bool pauseWasDown = false;
+enum class UiScreen { MainMenu, WorldSelect, Gameplay, Pause, Settings, Crafting };
+UiScreen uiScreen = UiScreen::MainMenu;
+UiScreen settingsReturnScreen = UiScreen::Pause;
+std::string currentWorldPath = "MiniCraft3D.world";
+std::vector<std::string> worldPaths;
+std::vector<std::string> worldNames;
+float mouseSensitivity = 0.105f;
+float fieldOfView = 76.0f;
+bool showDebugInfo = true;
+int renderDistanceChunks = 8;
+bool viewBobbing = true;
+float walkAnimationTime = 0.0f;
+float handSwingTime = 0.0f;
+double mouseX = 0.0;
+double mouseY = 0.0;
+std::string lastCraftMessage;
 int screenWidth = 1280;
 int screenHeight = 720;
 float worldTime = 0.0f;
@@ -63,6 +100,8 @@ struct Plane {
 };
 
 std::array<ChunkMesh, CHUNK_COUNT> chunks;
+mc::world::InfiniteWorld infiniteWorld;
+std::unordered_map<mc::world::ChunkPos, ChunkMesh, mc::world::ChunkPosHash> streamedMeshes;
 GLuint cubeVAO = 0;
 GLuint cubeVBO = 0;
 GLuint shaderProgram = 0;
@@ -183,13 +222,14 @@ glm::vec3 baseColor(int tile) {
         case 6: return {0.88f,0.91f,0.96f};
         case 7: return {0.72f,0.48f,0.16f};
         case 8: return {0.39f,0.25f,0.12f};
+        case 9: return {0.68f,0.43f,0.22f};
         default: return {0.28f,0.68f,0.17f};
     }
 }
 
 void createAtlas() {
     constexpr int tileSize = 16;
-    constexpr int columns = 9;
+    constexpr int columns = 10;
     std::vector<unsigned char> pixels(tileSize * columns * tileSize * 4);
     for (int tile = 0; tile < columns; ++tile) {
         glm::vec3 base = baseColor(tile);
@@ -208,6 +248,71 @@ void createAtlas() {
                 pixels[index + 1] = static_cast<unsigned char>(std::clamp(base.g * variation, 0.0f, 1.0f) * 255);
                 pixels[index + 2] = static_cast<unsigned char>(std::clamp(base.b * variation, 0.0f, 1.0f) * 255);
                 pixels[index + 3] = 255;
+            }
+        }
+    }
+    {
+        std::ifstream textureFile("textures/atlas.ppm", std::ios::binary);
+        if (textureFile) {
+            auto nextToken = [&]() {
+                std::string token;
+                while (textureFile >> std::ws && textureFile.peek() == '#') {
+                    std::string ignored;
+                    std::getline(textureFile, ignored);
+                }
+                textureFile >> token;
+                return token;
+            };
+            std::string format = nextToken();
+            int width = 0, height = 0, maximum = 0;
+            try {
+                width = std::stoi(nextToken());
+                height = std::stoi(nextToken());
+                maximum = std::stoi(nextToken());
+            } catch (...) {
+                width = height = maximum = 0;
+            }
+            if ((format == "P6" || format == "P3") &&
+                width == tileSize * columns && height == tileSize && maximum == 255) {
+                std::vector<unsigned char> external(static_cast<std::size_t>(width) * height * 4);
+                bool valid = true;
+                if (format == "P6") {
+                    char separator = 0;
+                    textureFile.get(separator);
+                    if (separator == '\r' && textureFile.peek() == '\n') textureFile.get();
+                    if (!std::isspace(static_cast<unsigned char>(separator))) valid = false;
+                    std::vector<unsigned char> rgb(static_cast<std::size_t>(width) * height * 3);
+                    if (valid) {
+                        textureFile.read(reinterpret_cast<char*>(rgb.data()),
+                                         static_cast<std::streamsize>(rgb.size()));
+                        valid = static_cast<bool>(textureFile);
+                    }
+                    if (valid) {
+                        for (std::size_t i = 0, j = 0; i < external.size(); i += 4, j += 3) {
+                            external[i] = rgb[j];
+                            external[i + 1] = rgb[j + 1];
+                            external[i + 2] = rgb[j + 2];
+                            external[i + 3] = 255;
+                        }
+                    }
+                } else {
+                    for (std::size_t i = 0; i < external.size(); i += 4) {
+                        int r = 0, g = 0, blue = 0;
+                        if (!(textureFile >> r >> g >> blue) ||
+                            r < 0 || r > 255 || g < 0 || g > 255 || blue < 0 || blue > 255) {
+                            valid = false;
+                            break;
+                        }
+                        external[i] = static_cast<unsigned char>(r);
+                        external[i + 1] = static_cast<unsigned char>(g);
+                        external[i + 2] = static_cast<unsigned char>(blue);
+                        external[i + 3] = 255;
+                    }
+                }
+                if (valid) pixels = std::move(external);
+                else std::cerr << "Texture atlas is invalid; using the built-in atlas.\\n";
+            } else {
+                std::cerr << "Texture atlas must be a 160x16 PPM image; using built-in atlas.\\n";
             }
         }
     }
@@ -284,63 +389,21 @@ bool insideWorld(int x, int y, int z) {
 }
 
 void generateWorld() {
-    for (int x = 0; x < WORLD_X; ++x) {
-        for (int z = 0; z < WORLD_Z; ++z) {
-            int top = terrainHeight(x, z);
-            int biome = biomeAt(x, z);
-            for (int y = 0; y <= top; ++y) {
-                if (y == top) {
-                    if (biome == 1) world[x][y][z] = 6;
-                    else if (biome == 2) world[x][y][z] = 7;
-                    else world[x][y][z] = 1;
-                } else if (y >= top - 3) {
-                    world[x][y][z] = biome == 1 ? 6 : 2;
-                } else {
-                    float caveA = std::sin(x * 0.23f + y * 0.37f) * std::cos(z * 0.19f - y * 0.28f);
-                    float caveB = std::sin((x + z) * 0.12f + y * 0.31f);
-                    bool cave = y > 3 && y < top - 3 && caveA + caveB > 0.98f;
-                    if (cave) world[x][y][z] = 0;
-                    else if (y < top - 5 && hashNoise(x * 3 + z, y * 7, 413) % 181 == 0) world[x][y][z] = 8;
-                    else world[x][y][z] = 3;
-                }
-            }
-        }
-    }
-
-    for (int x = 5; x < WORLD_X - 5; x += 5) {
-        for (int z = 5; z < WORLD_Z - 5; z += 6) {
-            int biome = biomeAt(x, z);
-            uint32_t roll = hashNoise(x, z, 77) % 100;
-            if (biome == 1 || roll > (biome == 3 ? 62u : 30u)) continue;
-            int ground = terrainHeight(x, z);
-            if (world[x][ground][z] != 1 || ground + 6 >= WORLD_Y) continue;
-            int trunk = biome == 3 ? 4 : 3;
-            for (int y = 1; y <= trunk; ++y) world[x][ground + y][z] = 4;
-            for (int dx = -2; dx <= 2; ++dx) {
-                for (int dz = -2; dz <= 2; ++dz) {
-                    for (int dy = trunk - 1; dy <= trunk + 2; ++dy) {
-                        int xx = x + dx, yy = ground + dy, zz = z + dz;
-                        if (!insideWorld(xx, yy, zz)) continue;
-                        if (std::abs(dx) + std::abs(dz) + std::abs(dy - (trunk + 1)) <= 4 &&
-                            world[xx][yy][zz] == 0) world[xx][yy][zz] = 5;
-                    }
-                }
-            }
-        }
-    }
-
-    player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
+    std::memset(world, 0, sizeof(world));
+    streamedMeshes.clear();
+    infiniteWorld.updateStreaming(0, 0, renderDistanceChunks);
+    player = glm::vec3(0.0f, mc::world::InfiniteWorld::heightAt(0, 0) + 2.2f, 0.0f);
     velocity = glm::vec3(0.0f);
 }
 
 bool meshSolidAt(int x, int y, int z) {
-    return insideWorld(x, y, z) && world[x][y][z] != 0;
+    return infiniteWorld.getBlock(x, y, z) != 0;
 }
 
 bool solidAt(int x, int y, int z) {
-    if (x < 0 || x >= WORLD_X || z < 0 || z >= WORLD_Z || y < 0) return true;
-    if (y >= WORLD_Y) return false;
-    return world[x][y][z] != 0;
+    if (y < 0) return true;
+    if (y >= mc::world::WorldHeight) return false;
+    return infiniteWorld.getBlock(x, y, z) != 0;
 }
 
 bool collides(glm::vec3 p) {
@@ -364,6 +427,14 @@ glm::vec3 cameraFront() {
 }
 
 void mouseCallback(GLFWwindow*, double xpos, double ypos) {
+    mouseX = xpos;
+    mouseY = ypos;
+    if (inventoryOpen || uiScreen != UiScreen::Gameplay) {
+        lastX = static_cast<float>(xpos);
+        lastY = static_cast<float>(ypos);
+        firstMouse = true;
+        return;
+    }
     if (firstMouse) {
         lastX = static_cast<float>(xpos);
         lastY = static_cast<float>(ypos);
@@ -373,11 +444,12 @@ void mouseCallback(GLFWwindow*, double xpos, double ypos) {
     float dy = lastY - static_cast<float>(ypos);
     lastX = static_cast<float>(xpos);
     lastY = static_cast<float>(ypos);
-    yaw += dx * 0.105f;
-    pitch = std::clamp(pitch + dy * 0.105f, -89.0f, 89.0f);
+    yaw += dx * mouseSensitivity;
+    pitch = std::clamp(pitch + dy * mouseSensitivity, -89.0f, 89.0f);
 }
 
 void scrollCallback(GLFWwindow*, double, double yoffset) {
+    if (uiScreen != UiScreen::Gameplay || inventoryOpen) return;
     selectedBlock += yoffset > 0 ? 1 : -1;
     if (selectedBlock < 1) selectedBlock = HOTBAR_SIZE;
     if (selectedBlock > HOTBAR_SIZE) selectedBlock = 1;
@@ -395,7 +467,7 @@ bool raycast(glm::ivec3& hit, glm::ivec3& previous) {
         );
         if (cell == lastCell) continue;
         lastCell = cell;
-        if (insideWorld(cell.x, cell.y, cell.z) && world[cell.x][cell.y][cell.z] != 0) {
+        if (infiniteWorld.getBlock(cell.x, cell.y, cell.z) != 0) {
             hit = cell;
             glm::vec3 before = player + direction * std::max(0.0f, distance - 0.03f);
             previous = glm::ivec3(
@@ -418,6 +490,7 @@ int tileForBlock(int id, int face) {
     if (id == 6) return 5;
     if (id == 7) return 6;
     if (id == 8) return 7;
+    if (id == 9) return 9;
     return 2;
 }
 
@@ -449,7 +522,7 @@ float vertexAO(int x, int y, int z, int face, int corner) {
 
 void addFace(std::vector<Vertex>& vertices, int localX, int y, int localZ,
              int worldX, int worldZ, int id, int face) {
-    constexpr float atlasWidth = 144.0f;
+    constexpr float atlasWidth = 160.0f;
     constexpr float tileSize = 16.0f;
     int tile = tileForBlock(id, face);
     float u0 = (tile * tileSize + 0.5f) / atlasWidth;
@@ -475,13 +548,9 @@ int chunkIndex(int cx, int cz) {
 }
 
 void markChunkDirty(int x, int z) {
-    int cx = x / CHUNK_SIZE;
-    int cz = z / CHUNK_SIZE;
-    chunks[chunkIndex(cx, cz)].dirty = true;
-    if (x % CHUNK_SIZE == 0 && cx > 0) chunks[chunkIndex(cx - 1, cz)].dirty = true;
-    if (x % CHUNK_SIZE == CHUNK_SIZE - 1 && cx + 1 < CHUNKS_X) chunks[chunkIndex(cx + 1, cz)].dirty = true;
-    if (z % CHUNK_SIZE == 0 && cz > 0) chunks[chunkIndex(cx, cz - 1)].dirty = true;
-    if (z % CHUNK_SIZE == CHUNK_SIZE - 1 && cz + 1 < CHUNKS_Z) chunks[chunkIndex(cx, cz + 1)].dirty = true;
+    const auto position = mc::world::InfiniteWorld::chunkOf(x, z);
+    auto found = streamedMeshes.find(position);
+    if (found != streamedMeshes.end()) found->second.dirty = true;
 }
 
 void rebuildChunk(int cx, int cz) {
@@ -516,10 +585,69 @@ void rebuildChunk(int cx, int cz) {
     chunk.dirty = false;
 }
 
+void rebuildStreamedChunk(mc::world::ChunkPos position) {
+    auto [it, inserted] = streamedMeshes.try_emplace(position);
+    ChunkMesh& mesh = it->second;
+    if (inserted) {
+        glGenVertexArrays(1, &mesh.vao);
+        glGenBuffers(1, &mesh.vbo);
+        glBindVertexArray(mesh.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, x)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, nx)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, u)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, ao)));
+    }
+    if (!mesh.dirty && !infiniteWorld.meshDirty(position)) return;
+    std::vector<Vertex> vertices;
+    vertices.reserve(24000);
+    const int originX = position.x * CHUNK_SIZE;
+    const int originZ = position.z * CHUNK_SIZE;
+    const int neighbor[6][3] = {{0,0,1},{0,0,-1},{0,1,0},{0,-1,0},{1,0,0},{-1,0,0}};
+    for (int x = 0; x < CHUNK_SIZE; ++x) {
+        for (int y = 0; y < mc::world::WorldHeight; ++y) {
+            for (int z = 0; z < CHUNK_SIZE; ++z) {
+                const int wx = originX + x;
+                const int wz = originZ + z;
+                const int id = infiniteWorld.getBlock(wx, y, wz);
+                if (!id) continue;
+                for (int face = 0; face < 6; ++face) {
+                    const int nx = wx + neighbor[face][0];
+                    const int ny = y + neighbor[face][1];
+                    const int nz = wz + neighbor[face][2];
+                    if (!meshSolidAt(nx, ny, nz))
+                        addFace(vertices, x, y, z, wx, wz, id, face);
+                }
+            }
+        }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
+        vertices.empty() ? nullptr : vertices.data(), GL_DYNAMIC_DRAW);
+    mesh.vertexCount = static_cast<GLsizei>(vertices.size());
+    mesh.dirty = false;
+    infiniteWorld.markMeshClean(position);
+}
+
 void rebuildDirtyChunks() {
-    for (int cz = 0; cz < CHUNKS_Z; ++cz)
-        for (int cx = 0; cx < CHUNKS_X; ++cx)
-            if (chunks[chunkIndex(cx, cz)].dirty) rebuildChunk(cx, cz);
+    infiniteWorld.updateStreaming(static_cast<int>(std::floor(player.x)),
+        static_cast<int>(std::floor(player.z)), renderDistanceChunks);
+    for (auto it = streamedMeshes.begin(); it != streamedMeshes.end();) {
+        if (!infiniteWorld.isLoaded(it->first)) {
+            glDeleteVertexArrays(1, &it->second.vao);
+            glDeleteBuffers(1, &it->second.vbo);
+            it = streamedMeshes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const auto& position : infiniteWorld.loadedChunkPositions())
+        rebuildStreamedChunk(position);
 }
 
 void setupGeometry() {
@@ -548,6 +676,21 @@ void setupGeometry() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
 }
 
+void loadSettings() {
+    std::ifstream file("MiniCraft3D.cfg");
+    if (!file) return;
+    file >> fieldOfView >> mouseSensitivity >> renderDistanceChunks >> showDebugInfo >> viewBobbing;
+    fieldOfView = std::clamp(fieldOfView, 60.0f, 100.0f);
+    mouseSensitivity = std::clamp(mouseSensitivity, 0.035f, 0.30f);
+    renderDistanceChunks = std::clamp(renderDistanceChunks, 4, 16);
+}
+
+void saveSettings() {
+    std::ofstream file("MiniCraft3D.cfg", std::ios::trunc);
+    if (file) file << fieldOfView << '\n' << mouseSensitivity << '\n'
+                  << renderDistanceChunks << '\n' << showDebugInfo << '\n' << viewBobbing << '\n';
+}
+
 void saveWorld() {
     struct Header {
         char magic[8];
@@ -555,9 +698,13 @@ void saveWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    Header header{{'M','C','3','D','2','7','1','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
+    Header header{{'M','C','3','D','I','N','F','1'}, WORLD_X, WORLD_Y, WORLD_Z};
     float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
-    std::ofstream file("MiniCraft3D.world", std::ios::binary | std::ios::trunc);
+    std::error_code directoryError;
+    std::filesystem::path savePath(currentWorldPath);
+    if (!savePath.parent_path().empty())
+        std::filesystem::create_directories(savePath.parent_path(), directoryError);
+    std::ofstream file(currentWorldPath, std::ios::binary | std::ios::trunc);
     if (!file) {
         std::cerr << "Could not save world.\n";
         return;
@@ -565,8 +712,25 @@ void saveWorld() {
     file.write(reinterpret_cast<const char*>(&header), sizeof(header));
     file.write(reinterpret_cast<const char*>(world), sizeof(world));
     file.write(reinterpret_cast<const char*>(playerData), sizeof(playerData));
-    if (file) std::cout << "World saved: MiniCraft3D.world\n";
-    else std::cerr << "World save failed.\n";
+    file.write(reinterpret_cast<const char*>(inventory.slots().data()),
+               static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
+    file.write(reinterpret_cast<const char*>(inventory.durabilitySlots().data()),
+               static_cast<std::streamsize>(sizeof(int) * mc::InventorySize));
+    float statsData[2] = {playerStats.health(), playerStats.hunger()};
+    file.write(reinterpret_cast<const char*>(statsData), sizeof(statsData));
+    uint32_t dropCount = static_cast<uint32_t>(itemDrops.size());
+    file.write(reinterpret_cast<const char*>(&dropCount), sizeof(dropCount));
+    for (const mc::ItemDrop& drop : itemDrops) {
+        int32_t itemData[2] = {drop.itemId, drop.count};
+        float state[7] = {drop.x, drop.y, drop.z, drop.vx, drop.vy, drop.vz, drop.age};
+        file.write(reinterpret_cast<const char*>(itemData), sizeof(itemData));
+        file.write(reinterpret_cast<const char*>(state), sizeof(state));
+    }
+    file.close();
+    if (file && infiniteWorld.saveAll())
+        std::cout << "World saved: " << currentWorldPath << "\n";
+    else
+        std::cerr << "World save failed.\n";
 }
 
 bool loadWorld() {
@@ -576,31 +740,239 @@ bool loadWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    std::ifstream file("MiniCraft3D.world", std::ios::binary);
+    std::ifstream file(currentWorldPath, std::ios::binary);
     if (!file) return false;
     Header header{};
-    int loaded[WORLD_X][WORLD_Y][WORLD_Z]{};
-    float playerData[5]{};
     file.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!file || std::memcmp(header.magic, "MC3D271", 7) != 0 ||
-        header.width != WORLD_X || header.height != WORLD_Y || header.depth != WORLD_Z)
+    bool oldFormat = std::memcmp(header.magic, "MC3D271", 7) == 0;
+    bool currentFormat = std::memcmp(header.magic, "MC3D272", 7) == 0;
+    bool survivalFormat = std::memcmp(header.magic, "MC3D273", 7) == 0;
+    bool infiniteFormat = std::memcmp(header.magic, "MC3DINF1", 8) == 0;
+    if (!file || (!oldFormat && !currentFormat && !survivalFormat && !infiniteFormat) ||
+        header.width == 0 || header.height == 0 || header.depth == 0 ||
+        header.width > 512 || header.height > 256 || header.depth > 512)
         return false;
-    file.read(reinterpret_cast<char*>(loaded), sizeof(loaded));
+
+    const std::size_t volume = static_cast<std::size_t>(header.width) *
+        header.height * header.depth;
+    if (volume > 64u * 1024u * 1024u) return false;
+    std::vector<int> loaded(volume);
+    float playerData[5]{};
+    file.read(reinterpret_cast<char*>(loaded.data()),
+              static_cast<std::streamsize>(loaded.size() * sizeof(int)));
     file.read(reinterpret_cast<char*>(playerData), sizeof(playerData));
-    if (!file) return false;
-    std::memcpy(world, loaded, sizeof(world));
-    player = glm::vec3(playerData[0], playerData[1], playerData[2]);
+    if (!file || !std::isfinite(playerData[0]) || !std::isfinite(playerData[1]) ||
+        !std::isfinite(playerData[2]) || !std::isfinite(playerData[3]) ||
+        !std::isfinite(playerData[4])) return false;
+
+    std::array<mc::ItemStack, mc::InventorySize> loadedInventory{};
+    std::array<int, mc::InventorySize> loadedDurability{};
+    float loadedStats[2] = {mc::PlayerStats::MaxHealth, mc::PlayerStats::MaxHunger};
+    std::vector<mc::ItemDrop> loadedDrops;
+    if (currentFormat || survivalFormat || infiniteFormat) {
+        file.read(reinterpret_cast<char*>(loadedInventory.data()),
+                  static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
+        if (survivalFormat || infiniteFormat) {
+            file.read(reinterpret_cast<char*>(loadedDurability.data()),
+                      static_cast<std::streamsize>(sizeof(int) * mc::InventorySize));
+            file.read(reinterpret_cast<char*>(loadedStats), sizeof(loadedStats));
+            if (!file || !std::isfinite(loadedStats[0]) || !std::isfinite(loadedStats[1])) return false;
+        }
+        uint32_t dropCount = 0;
+        file.read(reinterpret_cast<char*>(&dropCount), sizeof(dropCount));
+        if (!file || dropCount > 4096) return false;
+        loadedDrops.reserve(dropCount);
+        for (uint32_t i = 0; i < dropCount; ++i) {
+            int32_t itemData[2]{};
+            float state[7]{};
+            file.read(reinterpret_cast<char*>(itemData), sizeof(itemData));
+            file.read(reinterpret_cast<char*>(state), sizeof(state));
+            if (!file) return false;
+            if (itemData[0] <= 0 || itemData[1] <= 0) continue;
+            bool validState = true;
+            for (float value : state) validState = validState && std::isfinite(value);
+            if (!validState) continue;
+            mc::ItemDrop drop;
+            drop.itemId = itemData[0];
+            drop.count = itemData[1];
+            drop.x = state[0];
+            drop.y = state[1];
+            drop.z = state[2];
+            drop.vx = state[3];
+            drop.vy = state[4];
+            drop.vz = state[5];
+            drop.age = state[6];
+            loadedDrops.push_back(drop);
+        }
+    }
+
+    std::memset(world, 0, sizeof(world));
+    infiniteWorld = mc::world::InfiniteWorld(currentWorldPath + ".chunks");
+    for (auto& entry : streamedMeshes) {
+        glDeleteVertexArrays(1, &entry.second.vao);
+        glDeleteBuffers(1, &entry.second.vbo);
+    }
+    streamedMeshes.clear();
+    generateWorld();
+    const int offsetX = std::max(0, (WORLD_X - static_cast<int>(header.width)) / 2);
+    const int offsetZ = std::max(0, (WORLD_Z - static_cast<int>(header.depth)) / 2);
+    const int copyX = std::min(WORLD_X, static_cast<int>(header.width));
+    const int copyY = std::min(WORLD_Y, static_cast<int>(header.height));
+    const int copyZ = std::min(WORLD_Z, static_cast<int>(header.depth));
+    for (int x = 0; x < copyX; ++x)
+        for (int y = 0; y < copyY; ++y)
+            for (int z = 0; z < copyZ; ++z) {
+                std::size_t index = (static_cast<std::size_t>(x) * header.height + y) *
+                    header.depth + z;
+                world[x + offsetX][y][z + offsetZ] = loaded[index];
+                if (!infiniteFormat)
+                    infiniteWorld.setBlock(x + offsetX, y, z + offsetZ, static_cast<std::uint8_t>(loaded[index]));
+            }
+
+    player = infiniteFormat
+        ? glm::vec3(playerData[0], std::clamp(playerData[1], 1.0f, static_cast<float>(mc::world::WorldHeight - 1)), playerData[2])
+        : glm::vec3(std::clamp(playerData[0] + offsetX, 1.0f, static_cast<float>(WORLD_X - 2)),
+                    std::clamp(playerData[1], 1.0f, static_cast<float>(mc::world::WorldHeight - 1)),
+                    std::clamp(playerData[2] + offsetZ, 1.0f, static_cast<float>(WORLD_Z - 2)));
     yaw = playerData[3];
     pitch = std::clamp(playerData[4], -89.0f, 89.0f);
     velocity = glm::vec3(0.0f);
+    if (survivalFormat) inventory.replace(loadedInventory, loadedDurability);
+    else inventory.replace(loadedInventory);
+    playerStats.set(loadedStats[0], loadedStats[1]);
+    for (mc::ItemDrop& drop : loadedDrops) {
+        drop.x += static_cast<float>(offsetX);
+        drop.z += static_cast<float>(offsetZ);
+    }
+    itemDrops = std::move(loadedDrops);
+    infiniteWorld.updateStreaming(static_cast<int>(std::floor(player.x)),
+        static_cast<int>(std::floor(player.z)), renderDistanceChunks);
     return true;
 }
 
+
+void refreshWorldList() {
+    worldPaths.clear();
+    worldNames.clear();
+    std::error_code error;
+    std::filesystem::create_directories("worlds", error);
+    if (std::filesystem::exists("MiniCraft3D.world")) {
+        worldPaths.push_back("MiniCraft3D.world");
+        worldNames.push_back("Legacy World");
+    }
+    for (const auto& entry : std::filesystem::directory_iterator("worlds", error)) {
+        if (error) break;
+        if (!entry.is_regular_file() || entry.path().extension() != ".world") continue;
+        worldPaths.push_back(entry.path().string());
+        worldNames.push_back(entry.path().stem().string());
+    }
+    std::vector<std::size_t> order(worldPaths.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        return worldNames[a] < worldNames[b];
+    });
+    std::vector<std::string> sortedPaths, sortedNames;
+    for (std::size_t index : order) {
+        sortedPaths.push_back(worldPaths[index]);
+        sortedNames.push_back(worldNames[index]);
+    }
+    worldPaths = std::move(sortedPaths);
+    worldNames = std::move(sortedNames);
+}
+
+void startSelectedWorld(const std::string& path, bool createNew, GLFWwindow* window) {
+    currentWorldPath = path;
+    infiniteWorld = mc::world::InfiniteWorld(currentWorldPath + ".chunks");
+    for (auto& entry : streamedMeshes) {
+        glDeleteVertexArrays(1, &entry.second.vao);
+        glDeleteBuffers(1, &entry.second.vbo);
+    }
+    streamedMeshes.clear();
+    if (createNew) {
+        std::memset(world, 0, sizeof(world));
+        inventory.clear();
+        itemDrops.clear();
+        playerStats.set(mc::PlayerStats::MaxHealth, mc::PlayerStats::MaxHunger);
+        yaw = -90.0f;
+        pitch = 0.0f;
+        worldTime = 0.0f;
+        generateWorld();
+    } else if (!loadWorld()) {
+        generateWorld();
+    }
+    for (ChunkMesh& chunk : chunks) chunk.dirty = true;
+    rebuildDirtyChunks();
+    worldInitialized = true;
+    leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    inventoryClickWasDown = leftWasDown;
+    uiClickWasDown = leftWasDown;
+    uiScreen = UiScreen::Gameplay;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    firstMouse = true;
+}
+
+std::string createWorldPath() {
+    int number = 1;
+    std::error_code error;
+    while (std::filesystem::exists("worlds/World " + std::to_string(number) + ".world", error))
+        ++number;
+    return "worlds/World " + std::to_string(number) + ".world";
+}
+
 void processInput(GLFWwindow* window, float dt) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
+    bool escapeDown = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+    if (escapeDown && !pauseWasDown) {
+        if (inventoryOpen) {
+            inventoryOpen = false;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        } else if (uiScreen == UiScreen::MainMenu) {
+        } else if (uiScreen == UiScreen::WorldSelect) {
+            uiScreen = UiScreen::MainMenu;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else if (uiScreen == UiScreen::Gameplay) {
+            uiScreen = UiScreen::Pause;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else if (uiScreen == UiScreen::Settings) {
+            uiScreen = settingsReturnScreen;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else {
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
+        firstMouse = true;
+    }
+    pauseWasDown = escapeDown;
+    if (uiScreen != UiScreen::Gameplay) {
+        playerMoving = false;
+        playerSprinting = false;
+        return;
+    }
     for (int i = 0; i < HOTBAR_SIZE; ++i)
         if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) selectedBlock = i + 1;
+
+    bool inventoryDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+    bool craftDown = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+    bool recipeBookDown = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
+    if (inventoryDown && !inventoryWasDown) {
+        inventoryOpen = !inventoryOpen;
+        glfwSetInputMode(window, GLFW_CURSOR, inventoryOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+        firstMouse = true;
+    }
+    if (craftDown && !craftWasDown) {
+        int crafted = mc::Crafting::craftFirstAvailable(inventory);
+        lastCraftMessage = crafted >= 0
+            ? std::string("Crafted ") + mc::Crafting::recipe(static_cast<std::size_t>(crafted)).name
+            : "No available recipe";
+    }
+    inventoryWasDown = inventoryDown;
+    craftWasDown = craftDown;
+    if (recipeBookDown && !craftingWasDown) {
+        uiScreen = UiScreen::Crafting;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        firstMouse = true;
+    }
+    craftingWasDown = recipeBookDown;
 
     bool saveDown = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
     bool loadDown = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
@@ -611,17 +983,24 @@ void processInput(GLFWwindow* window, float dt) {
     }
     saveWasDown = saveDown;
     loadWasDown = loadDown;
+    if (inventoryOpen) {
+        playerMoving = false;
+        playerSprinting = false;
+        return;
+    }
 
     glm::vec3 front = cameraFront();
     glm::vec3 forward = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
     glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0, 1, 0)));
-    float speed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ? 8.5f : 5.2f;
+    playerSprinting = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+    float speed = playerSprinting ? 8.5f : 5.2f;
     glm::vec3 move(0.0f);
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) move += forward;
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) move -= forward;
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) move += right;
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) move -= right;
-    if (glm::length(move) > 0.0f) move = glm::normalize(move) * speed * dt;
+    playerMoving = glm::length(move) > 0.0f;
+    if (playerMoving) move = glm::normalize(move) * speed * dt;
 
     glm::vec3 next = player;
     next.x += move.x;
@@ -641,39 +1020,275 @@ void processInput(GLFWwindow* window, float dt) {
         player.y = next.y;
         grounded = false;
     } else {
-        if (velocity.y < 0.0f) grounded = true;
+        if (velocity.y < 0.0f) {
+            grounded = true;
+            float impactSpeed = -velocity.y;
+            if (impactSpeed > 12.0f) playerStats.damage((impactSpeed - 12.0f) * 1.5f);
+        }
         velocity.y = 0.0f;
     }
     if (player.y < -12.0f) {
-        player = glm::vec3(32.0f, terrainHeight(32, 32) + 2.2f, 32.0f);
+        playerStats.damage(mc::PlayerStats::MaxHealth);
+        player = glm::vec3(64.0f, terrainHeight(64, 64) + 2.2f, 64.0f);
         velocity = glm::vec3(0.0f);
     }
 }
 
-void processBlocks(GLFWwindow* window) {
+glm::vec3 uiColor(int id);
+void setFrameUniforms(const glm::mat4& view, const glm::mat4& projection,
+                      const glm::vec3& camera, const glm::vec3& fog);
+
+void processUiMouse(GLFWwindow* window) {
+    bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    if (uiScreen == UiScreen::Gameplay || !down || uiClickWasDown) {
+        uiClickWasDown = down;
+        return;
+    }
+    const int x = static_cast<int>(mouseX);
+    const int y = screenHeight - static_cast<int>(mouseY);
+    const int centerX = screenWidth / 2;
+    const int centerY = screenHeight / 2;
+    auto inside = [&](int left, int bottom, int width, int height) {
+        return x >= left && x < left + width && y >= bottom && y < bottom + height;
+    };
+    if (uiScreen == UiScreen::MainMenu) {
+        if (inside(centerX - 130, centerY + 48, 260, 42)) {
+            refreshWorldList();
+            uiScreen = UiScreen::WorldSelect;
+        } else if (inside(centerX - 130, centerY - 4, 260, 42)) {
+            settingsReturnScreen = UiScreen::MainMenu;
+            uiScreen = UiScreen::Settings;
+        } else if (inside(centerX - 130, centerY - 56, 260, 42)) {
+            glfwSetWindowShouldClose(window, true);
+        }
+    } else if (uiScreen == UiScreen::WorldSelect) {
+        bool selected = false;
+        for (std::size_t i = 0; i < worldPaths.size() && i < 5; ++i) {
+            int rowY = centerY + 82 - static_cast<int>(i) * 43;
+            if (inside(centerX - 190, rowY, 380, 34)) {
+                startSelectedWorld(worldPaths[i], false, window);
+                selected = true;
+                break;
+            }
+        }
+        if (!selected && inside(centerX - 190, centerY - 145, 380, 38)) {
+            std::string path = createWorldPath();
+            startSelectedWorld(path, true, window);
+            saveWorld();
+        } else if (!selected && inside(centerX - 190, centerY - 195, 380, 34)) {
+            uiScreen = UiScreen::MainMenu;
+        }
+    } else if (uiScreen == UiScreen::Crafting) {
+        if (inside(centerX - 210, centerY - 220, 420, 34)) {
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        } else {
+            for (std::size_t i = 0; i < mc::Crafting::recipeCount(); ++i) {
+                int rowY = centerY + 155 - static_cast<int>(i) * 30;
+                if (inside(centerX - 200, rowY, 400, 26) && mc::Crafting::craft(inventory, i)) {
+                    lastCraftMessage = std::string("Crafted ") + mc::Crafting::recipe(i).name;
+                    break;
+                }
+            }
+        }
+    } else if (uiScreen == UiScreen::Pause) {
+        if (inside(centerX - 116, centerY + 48, 232, 38)) {
+            uiScreen = UiScreen::Gameplay;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            firstMouse = true;
+        } else if (inside(centerX - 116, centerY + 1, 232, 38)) {
+            saveWorld();
+            lastCraftMessage = "World saved";
+        } else if (inside(centerX - 116, centerY - 46, 232, 38)) {
+            settingsReturnScreen = UiScreen::Pause;
+            uiScreen = UiScreen::Settings;
+        } else if (inside(centerX - 116, centerY - 93, 232, 38)) {
+            glfwSetWindowShouldClose(window, true);
+        }
+    } else if (uiScreen == UiScreen::Settings) {
+        const int left = centerX - 215;
+        if (inside(left + 274, centerY + 127, 42, 34))
+            fieldOfView = std::clamp(fieldOfView - 2.0f, 60.0f, 100.0f);
+        else if (inside(left + 370, centerY + 127, 42, 34))
+            fieldOfView = std::clamp(fieldOfView + 2.0f, 60.0f, 100.0f);
+        else if (inside(left + 274, centerY + 65, 42, 34))
+            mouseSensitivity = std::clamp(mouseSensitivity - 0.01f, 0.035f, 0.30f);
+        else if (inside(left + 370, centerY + 65, 42, 34))
+            mouseSensitivity = std::clamp(mouseSensitivity + 0.01f, 0.035f, 0.30f);
+        else if (inside(left + 274, centerY + 3, 42, 34))
+            renderDistanceChunks = std::clamp(renderDistanceChunks - 1, 4, 16);
+        else if (inside(left + 370, centerY + 3, 42, 34))
+            renderDistanceChunks = std::clamp(renderDistanceChunks + 1, 4, 16);
+        else if (inside(left + 274, centerY - 59, 138, 34))
+            showDebugInfo = !showDebugInfo;
+        else if (inside(left + 274, centerY - 121, 138, 34))
+            viewBobbing = !viewBobbing;
+        else if (inside(centerX - 116, centerY - 233, 232, 38))
+            uiScreen = settingsReturnScreen;
+    }
+    uiClickWasDown = down;
+}
+
+void processInventoryMouse(GLFWwindow* window) {
+    bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    if (!inventoryOpen) {
+        inventoryClickWasDown = down;
+        return;
+    }
+    if (down && !inventoryClickWasDown) {
+        const int box = 42;
+        const int gap = 5;
+        const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+        const int start = (screenWidth - total) / 2;
+        int x = static_cast<int>(mouseX);
+        int y = screenHeight - static_cast<int>(mouseY);
+        int column = (x - start) / (box + gap);
+        if (column >= 0 && column < HOTBAR_SIZE) {
+            int slotX = start + column * (box + gap);
+            if (x >= slotX && x < slotX + box && y >= 18 && y < 18 + box) {
+                selectedBlock = column + 1;
+            } else {
+                for (int row = 0; row < 3; ++row) {
+                    int slotY = 18 + (3 - row) * (box + gap) + 12;
+                    if (x < slotX || x >= slotX + box || y < slotY || y >= slotY + box) continue;
+                    std::size_t backpackIndex = static_cast<std::size_t>(8 + row * 8 + column);
+                    std::size_t hotbarIndex = static_cast<std::size_t>(selectedBlock - 1);
+                    inventory.swapSlots(backpackIndex, hotbarIndex);
+                    break;
+                }
+            }
+        }
+    }
+    inventoryClickWasDown = down;
+}
+
+void processBlocks(GLFWwindow* window, float dt) {
+    if (uiScreen != UiScreen::Gameplay) {
+        leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        return;
+    }
+    if (inventoryOpen) {
+        leftWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        rightWasDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        return;
+    }
     glm::ivec3 hit, previous;
     bool found = raycast(hit, previous);
     bool left = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     bool right = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    if (left && !leftWasDown) handSwingTime = 1.0f;
     bool changed = false;
 
-    if (left && !leftWasDown && found) {
-        world[hit.x][hit.y][hit.z] = 0;
-        markChunkDirty(hit.x, hit.z);
-        changed = true;
+    if (left && found) {
+        if (hit != miningTarget) {
+            miningTarget = hit;
+            miningProgress = 0.0f;
+        }
+        int brokenBlock = infiniteWorld.getBlock(hit.x, hit.y, hit.z);
+        int heldItem = inventory.slot(static_cast<std::size_t>(selectedBlock - 1)).itemId;
+        float hardness = 1.0f;
+        if (brokenBlock == 3) hardness = 2.0f;
+        else if (brokenBlock == 8) hardness = 3.0f;
+        else if (brokenBlock == 4) hardness = 1.5f;
+        else if (brokenBlock == 5) hardness = 0.25f;
+        else if (brokenBlock == 1 || brokenBlock == 2 || brokenBlock == 6 || brokenBlock == 7)
+            hardness = 0.45f;
+        float efficiency = mc::Items::miningEfficiency(heldItem, brokenBlock);
+        if (!mc::Items::isTool(heldItem)) efficiency = 0.75f;
+        miningProgress += dt * efficiency / hardness;
+        if (miningProgress >= 1.0f) {
+            bool requiresPickaxe = brokenBlock == 3 || brokenBlock == 8;
+            bool harvestable = !requiresPickaxe || mc::Items::canHarvest(heldItem, brokenBlock);
+            infiniteWorld.setBlock(hit.x, hit.y, hit.z, 0);
+            if (harvestable) {
+                mc::ItemDrop drop;
+                drop.itemId = brokenBlock;
+                drop.count = 1;
+                drop.x = static_cast<float>(hit.x);
+                drop.y = static_cast<float>(hit.y);
+                drop.z = static_cast<float>(hit.z);
+                drop.vy = 1.8f;
+                itemDrops.push_back(drop);
+            }
+            if (mc::Items::isTool(heldItem) &&
+                mc::Items::toolType(heldItem) != mc::ToolType::Sword)
+                inventory.damageItem(static_cast<std::size_t>(selectedBlock - 1));
+            markChunkDirty(hit.x, hit.z);
+            changed = true;
+            miningTarget = glm::ivec3(-999);
+            miningProgress = 0.0f;
+        }
+    } else {
+        miningTarget = glm::ivec3(-999);
+        miningProgress = 0.0f;
     }
-    if (right && !rightWasDown && found && insideWorld(previous.x, previous.y, previous.z) &&
-        world[previous.x][previous.y][previous.z] == 0) {
-        world[previous.x][previous.y][previous.z] = selectedBlock;
-        if (collides(player)) world[previous.x][previous.y][previous.z] = 0;
-        else {
+
+    const mc::ItemStack held = inventory.slot(static_cast<std::size_t>(selectedBlock - 1));
+    if (right && !rightWasDown && found && held.itemId >= 1 && held.itemId <= 9 &&
+        held.count > 0 && infiniteWorld.getBlock(previous.x, previous.y, previous.z) == 0) {
+        infiniteWorld.setBlock(previous.x, previous.y, previous.z, static_cast<std::uint8_t>(held.itemId));
+        if (collides(player)) infiniteWorld.setBlock(previous.x, previous.y, previous.z, 0);
+        else if (inventory.removeItem(held.itemId, 1)) {
             markChunkDirty(previous.x, previous.z);
             changed = true;
+        } else {
+            infiniteWorld.setBlock(previous.x, previous.y, previous.z, 0);
         }
     }
+
     leftWasDown = left;
     rightWasDown = right;
     if (changed) rebuildDirtyChunks();
+}
+
+void updateDrops(float dt) {
+    for (std::size_t i = 0; i < itemDrops.size();) {
+        mc::ItemDrop& drop = itemDrops[i];
+        drop.age += dt;
+        drop.vy = std::max(drop.vy - 12.0f * dt, -12.0f);
+        drop.x += drop.vx * dt;
+        drop.z += drop.vz * dt;
+        float nextY = drop.y + drop.vy * dt;
+        int bx = static_cast<int>(std::floor(drop.x + 0.5f));
+        int by = static_cast<int>(std::floor(nextY - 0.12f + 0.5f));
+        int bz = static_cast<int>(std::floor(drop.z + 0.5f));
+        if (solidAt(bx, by, bz)) {
+            drop.vy = 0.0f;
+            drop.y = static_cast<float>(by) + 0.62f;
+        } else {
+            drop.y = nextY;
+        }
+        drop.vx *= std::max(0.0f, 1.0f - 3.0f * dt);
+        drop.vz *= std::max(0.0f, 1.0f - 3.0f * dt);
+
+        glm::vec3 delta(drop.x - player.x, drop.y - (player.y - 0.8f), drop.z - player.z);
+        if (glm::dot(delta, delta) < 2.25f) {
+            int remaining = inventory.addItem(drop.itemId, drop.count);
+            if (remaining == 0) {
+                itemDrops.erase(itemDrops.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            drop.count = remaining;
+        }
+        ++i;
+    }
+}
+
+void renderDrops(const glm::mat4& view, const glm::mat4& projection,
+                 const glm::vec3& camera, const glm::vec3& fog) {
+    if (itemDrops.empty()) return;
+    setFrameUniforms(view, projection, camera, fog);
+    glUniform1i(locTextured, 0);
+    glBindVertexArray(cubeVAO);
+    for (const mc::ItemDrop& drop : itemDrops) {
+        glm::vec3 color = uiColor(drop.itemId);
+        glUniform3fv(locSolidColor, 1, glm::value_ptr(color));
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(drop.x, drop.y, drop.z));
+        model = glm::scale(model, glm::vec3(0.22f));
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+    }
 }
 
 glm::vec4 matrixRow(const glm::mat4& m, int row) {
@@ -697,7 +1312,7 @@ std::array<Plane, 6> extractFrustum(const glm::mat4& matrix) {
 
 bool chunkVisible(const std::array<Plane, 6>& planes, int cx, int cz) {
     glm::vec3 minimum(cx * CHUNK_SIZE - 0.5f, -0.5f, cz * CHUNK_SIZE - 0.5f);
-    glm::vec3 maximum((cx + 1) * CHUNK_SIZE - 0.5f, WORLD_Y - 0.5f,
+    glm::vec3 maximum((cx + 1) * CHUNK_SIZE - 0.5f, mc::world::WorldHeight - 0.5f,
                       (cz + 1) * CHUNK_SIZE - 0.5f);
     for (const Plane& plane : planes) {
         glm::vec3 positive(
@@ -733,18 +1348,19 @@ int renderWorld(const glm::mat4& view, const glm::mat4& projection,
     glBindTexture(GL_TEXTURE_2D, atlasTexture);
     auto planes = extractFrustum(projection * view);
     int visible = 0;
-
-    for (int cz = 0; cz < CHUNKS_Z; ++cz) {
-        for (int cx = 0; cx < CHUNKS_X; ++cx) {
-            ChunkMesh& chunk = chunks[chunkIndex(cx, cz)];
-            if (!chunk.vertexCount || !chunkVisible(planes, cx, cz)) continue;
-            glm::mat4 model = glm::translate(glm::mat4(1.0f),
-                glm::vec3(cx * CHUNK_SIZE, 0.0f, cz * CHUNK_SIZE));
-            glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
-            glBindVertexArray(chunk.vao);
-            glDrawArrays(GL_TRIANGLES, 0, chunk.vertexCount);
-            ++visible;
-        }
+    const auto positions = infiniteWorld.visibleChunks(
+        static_cast<int>(std::floor(camera.x)), static_cast<int>(std::floor(camera.z)), renderDistanceChunks);
+    for (const auto& position : positions) {
+        auto found = streamedMeshes.find(position);
+        if (found == streamedMeshes.end()) continue;
+        ChunkMesh& mesh = found->second;
+        if (!mesh.vertexCount || !chunkVisible(planes, position.x, position.z)) continue;
+        glm::mat4 model = glm::translate(glm::mat4(1.0f),
+            glm::vec3(position.x * CHUNK_SIZE, 0.0f, position.z * CHUNK_SIZE));
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+        glBindVertexArray(mesh.vao);
+        glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+        ++visible;
     }
     return visible;
 }
@@ -765,6 +1381,25 @@ void renderTarget(const glm::mat4& view, const glm::mat4& projection,
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
+void renderFirstPersonHand(const glm::mat4& view, const glm::mat4& projection,
+                           const glm::vec3& camera) {
+    glm::vec3 front = cameraFront();
+    glm::vec3 right = glm::normalize(glm::cross(front, glm::vec3(0.0f, 1.0f, 0.0f)));
+    glm::vec3 up = glm::normalize(glm::cross(right, front));
+    float swing = handSwingTime > 0.0f ? std::sin((1.0f - handSwingTime) * 3.1415926f) : 0.0f;
+    glm::vec3 position = camera + front * 0.62f + right * (0.34f + swing * 0.08f)
+        - up * (0.34f + swing * 0.09f);
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
+    model = glm::rotate(model, glm::radians(-28.0f + swing * 58.0f), right);
+    model = glm::scale(model, glm::vec3(0.17f, 0.17f, 0.46f));
+    setFrameUniforms(view, projection, camera, {0.0f, 0.0f, 0.0f});
+    glUniform1i(locTextured, 0);
+    glUniform3f(locSolidColor, 0.72f, 0.48f, 0.34f);
+    glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+    glBindVertexArray(cubeVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+}
+
 glm::vec3 uiColor(int id) {
     switch (id) {
         case 1: return {0.28f,0.68f,0.17f};
@@ -774,46 +1409,361 @@ glm::vec3 uiColor(int id) {
         case 5: return {0.13f,0.42f,0.12f};
         case 6: return {0.78f,0.69f,0.43f};
         case 7: return {0.88f,0.91f,0.96f};
-        default: return {0.72f,0.48f,0.16f};
+        case 8: return {0.72f,0.48f,0.16f};
+        case 9: return {0.68f,0.43f,0.22f};
+        case 10: return {0.78f,0.78f,0.82f};
+        case 11: return {0.58f,0.35f,0.18f};
+        case 20: return {0.68f,0.48f,0.27f};
+        case 21: return {0.55f,0.58f,0.62f};
+        case 22: return {0.66f,0.43f,0.22f};
+        case 23: return {0.72f,0.61f,0.39f};
+        case 24: return {0.76f,0.76f,0.79f};
+        case 25: return {0.56f,0.59f,0.64f};
+        case 26: return {0.62f,0.64f,0.67f};
+        case 27: return {0.68f,0.70f,0.74f};
+        default: return {0.2f,0.2f,0.2f};
     }
+}
+
+std::string uiItemName(int id) {
+    switch (id) {
+        case 1: return "Grass";
+        case 2: return "Dirt";
+        case 3: return "Stone";
+        case 4: return "Log";
+        case 5: return "Leaves";
+        case 6: return "Sand";
+        case 7: return "Snow";
+        case 8: return "Ore";
+        case 9: return "Planks";
+        case 10: return "Sticks";
+        case 11: return "Crafting Table";
+        case 20: return "Wooden Pickaxe";
+        case 21: return "Stone Pickaxe";
+        case 22: return "Wooden Axe";
+        case 23: return "Wooden Shovel";
+        case 24: return "Wooden Sword";
+        case 25: return "Stone Axe";
+        case 26: return "Stone Shovel";
+        case 27: return "Stone Sword";
+        default: return "Item";
+    }
+}
+
+void drawUiRect(int x, int y, int width, int height, const glm::vec3& color) {
+    if (width <= 0 || height <= 0) return;
+    glScissor(x, y, width, height);
+    glClearColor(color.r, color.g, color.b, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+}
+
+void drawUiDigit(int digit, int x, int y, int scale, const glm::vec3& color) {
+    static const unsigned char glyphs[10][5] = {
+        {7,5,5,5,7},{2,6,2,2,7},{7,1,7,4,7},{7,1,7,1,7},{5,5,7,1,1},
+        {7,4,7,1,7},{7,4,7,5,7},{7,1,1,1,1},{7,5,7,5,7},{7,5,7,1,7}
+    };
+    if (digit < 0 || digit > 9) return;
+    for (int row = 0; row < 5; ++row)
+        for (int column = 0; column < 3; ++column)
+            if (glyphs[digit][row] & (1u << (2 - column)))
+                drawUiRect(x + column * scale, y + (4 - row) * scale, scale, scale, color);
+}
+
+void drawUiNumber(int value, int x, int y, int scale, const glm::vec3& color) {
+    std::string digits = std::to_string(std::max(0, value));
+    if (digits.size() > 3) digits = digits.substr(digits.size() - 3);
+    int width = static_cast<int>(digits.size()) * (4 * scale) - scale;
+    int cursor = x - width;
+    for (char digit : digits) {
+        drawUiDigit(digit - '0', cursor, y, scale, color);
+        cursor += 4 * scale;
+    }
+}
+
+void drawSurvivalIcon(int x, int y, float amount, bool food) {
+    static const char* heart[6] = {
+        "##..##", "######", "######", ".####.", "..##..", "...#.."
+    };
+    static const char* drumstick[6] = {
+        "..###.", ".#####", "..####", ".#####", "#####.", ".###.."
+    };
+    const char** shape = food ? drumstick : heart;
+    const glm::vec3 shadow = food ? glm::vec3(0.20f,0.12f,0.07f) : glm::vec3(0.22f,0.035f,0.045f);
+    const glm::vec3 fill = food ? glm::vec3(0.91f,0.56f,0.16f) : glm::vec3(0.91f,0.16f,0.22f);
+    const glm::vec3 muted = food ? glm::vec3(0.35f,0.25f,0.16f) : glm::vec3(0.34f,0.13f,0.15f);
+    for (int row = 0; row < 6; ++row) {
+        for (int column = 0; column < 6; ++column) {
+            if (shape[row][column] != '#') continue;
+            int px = x + column * 2;
+            int py = y + (5 - row) * 2;
+            drawUiRect(px, py, 2, 2, shadow);
+            float point = static_cast<float>(column) / 6.0f;
+            drawUiRect(px, py + 1, 1, 1, point < amount ? fill : muted);
+        }
+    }
+}
+
+void drawUiItemIcon(int x, int y, int itemId) {
+    glm::vec3 color = uiColor(itemId);
+    drawUiRect(x + 2, y + 1, 22, 22, glm::vec3(0.025f,0.03f,0.04f));
+    drawUiRect(x + 4, y + 3, 18, 18, color);
+    drawUiRect(x + 4, y + 18, 18, 3, color * 0.68f);
+    drawUiRect(x + 5, y + 19, 6, 2, color * 1.18f);
 }
 
 void drawUI() {
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_SCISSOR_TEST);
-    int cx = screenWidth / 2;
-    int cy = screenHeight / 2;
-    glScissor(cx - 1, cy - 9, 2, 18);
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glScissor(cx - 9, cy - 1, 18, 2);
-    glClear(GL_COLOR_BUFFER_BIT);
 
-    const int box = 42;
-    const int gap = 5;
-    const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
-    const int start = (screenWidth - total) / 2;
-    for (int i = 0; i < HOTBAR_SIZE; ++i) {
-        int x = start + i * (box + gap);
-        glScissor(x, 18, box, box);
-        glClearColor(0.035f, 0.045f, 0.06f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glScissor(x + 5, 23, box - 10, box - 10);
-        glm::vec3 color = uiColor(i + 1);
-        glClearColor(color.r, color.g, color.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        if (i + 1 == selectedBlock) {
-            glScissor(x - 2, 16, box + 4, 2);
-            glClearColor(1.0f, 0.83f, 0.2f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-            glScissor(x - 2, 60, box + 4, 2);
-            glClear(GL_COLOR_BUFFER_BIT);
+    const int centerX = screenWidth / 2;
+    const int centerY = screenHeight / 2;
+    const glm::vec3 panel = {0.035f,0.045f,0.065f};
+    const glm::vec3 panelEdge = {0.20f,0.25f,0.31f};
+    const glm::vec3 slotColor = {0.075f,0.09f,0.12f};
+    const glm::vec3 slotInner = {0.12f,0.14f,0.17f};
+    const glm::vec3 white = {0.91f,0.94f,0.96f};
+    const glm::vec3 muted = {0.47f,0.54f,0.62f};
+
+    auto glyph = [](char raw) -> std::array<unsigned char, 7> {
+        char c = raw >= 'a' && raw <= 'z' ? static_cast<char>(raw - 'a' + 'A') : raw;
+        static const std::array<std::array<unsigned char, 7>, 36> font = {{
+            {{14,17,17,31,17,17,17}},{{30,17,17,30,17,17,30}},{{14,17,16,16,16,17,14}},
+            {{30,17,17,17,17,17,30}},{{31,16,16,30,16,16,31}},{{31,16,16,30,16,16,16}},
+            {{14,17,16,23,17,17,15}},{{17,17,17,31,17,17,17}},{{14,4,4,4,4,4,14}},
+            {{7,2,2,2,18,18,12}},{{17,18,20,24,20,18,17}},{{16,16,16,16,16,16,31}},
+            {{17,27,21,21,17,17,17}},{{17,25,21,19,17,17,17}},{{14,17,17,17,17,17,14}},
+            {{30,17,17,30,16,16,16}},{{14,17,17,17,21,18,13}},{{30,17,17,30,20,18,17}},
+            {{15,16,16,14,1,1,30}},{{31,4,4,4,4,4,4}},{{17,17,17,17,17,17,14}},
+            {{17,17,17,17,17,10,4}},{{17,17,17,21,21,21,10}},{{17,17,10,4,10,17,17}},
+            {{17,17,10,4,4,4,4}},{{31,1,2,4,8,16,31}},
+            {{14,17,19,21,25,17,14}},{{4,12,4,4,4,4,14}},{{14,17,1,2,4,8,31}},
+            {{30,1,1,14,1,1,30}},{{2,6,10,18,31,2,2}},{{31,16,16,30,1,1,30}},
+            {{14,16,16,30,17,17,14}},{{31,1,2,4,8,8,8}},{{14,17,17,14,17,17,14}},
+            {{14,17,17,15,1,1,14}}
+        }};
+        if (c >= 'A' && c <= 'Z') return font[static_cast<std::size_t>(c - 'A')];
+        if (c >= '0' && c <= '9') return font[static_cast<std::size_t>(26 + c - '0')];
+        if (c == '-') return {{0,0,0,31,0,0,0}};
+        if (c == '.') return {{0,0,0,0,0,12,12}};
+        if (c == ':') return {{0,12,12,0,12,12,0}};
+        if (c == '/') return {{1,2,2,4,8,8,16}};
+        if (c == '+') return {{0,4,4,31,4,4,0}};
+        return {{0,0,0,0,0,0,0}};
+    };
+
+    auto drawText = [&](const std::string& value, int x, int y, int scale,
+                        const glm::vec3& color, bool centered = false) {
+        int width = value.empty() ? 0 : static_cast<int>(value.size()) * 6 * scale - scale;
+        int cursor = centered ? x - width / 2 : x;
+        for (char c : value) {
+            auto rows = glyph(c);
+            for (int row = 0; row < 7; ++row)
+                for (int column = 0; column < 5; ++column)
+                    if (rows[static_cast<std::size_t>(row)] & (1u << (4 - column)))
+                        drawUiRect(cursor + column * scale, y + (6 - row) * scale,
+                                   scale, scale, color);
+            cursor += 6 * scale;
+        }
+    };
+
+    auto drawButton = [&](int x, int y, int width, int height, const std::string& label,
+                          bool highlighted = false) {
+        drawUiRect(x, y, width, height, highlighted ? glm::vec3(0.78f,0.59f,0.18f) : panelEdge);
+        drawUiRect(x + 2, y + 2, width - 4, height - 4,
+                   highlighted ? glm::vec3(0.18f,0.15f,0.09f) : slotColor);
+        drawText(label, x + width / 2, y + (height - 7 * 2) / 2 + 1, 2,
+                 highlighted ? glm::vec3(1.0f,0.88f,0.54f) : white, true);
+    };
+
+    if (uiScreen == UiScreen::MainMenu) {
+        drawUiRect(0, 0, screenWidth, screenHeight, {0.025f,0.045f,0.075f});
+        drawUiRect(centerX - 270, centerY - 180, 540, 360, panelEdge);
+        drawUiRect(centerX - 266, centerY - 176, 532, 352, panel);
+        drawText("MINICRAFT 3D", centerX, centerY + 112, 5, white, true);
+        drawText("A VOXEL SURVIVAL GAME", centerX, centerY + 78, 1, muted, true);
+        drawButton(centerX - 130, centerY + 48, 260, 42, "SINGLEPLAYER", true);
+        drawButton(centerX - 130, centerY - 4, 260, 42, "SETTINGS");
+        drawButton(centerX - 130, centerY - 56, 260, 42, "QUIT GAME");
+        drawText("27.6 EXPANSION", centerX, centerY - 145, 1, muted, true);
+    }
+
+    if (uiScreen == UiScreen::WorldSelect) {
+        drawUiRect(centerX - 250, centerY - 235, 500, 470, panelEdge);
+        drawUiRect(centerX - 246, centerY - 231, 492, 462, panel);
+        drawText("SELECT WORLD", centerX, centerY + 190, 3, white, true);
+        for (std::size_t i = 0; i < worldNames.size() && i < 5; ++i) {
+            int rowY = centerY + 82 - static_cast<int>(i) * 43;
+            drawButton(centerX - 190, rowY, 380, 34, worldNames[i], i == 0);
+        }
+        if (worldNames.empty())
+            drawText("NO SAVED WORLDS", centerX, centerY + 25, 2, muted, true);
+        drawButton(centerX - 190, centerY - 145, 380, 38, "CREATE NEW WORLD", true);
+        drawButton(centerX - 190, centerY - 195, 380, 34, "BACK");
+    }
+
+    if (uiScreen == UiScreen::Crafting) {
+        drawUiRect(centerX - 230, centerY - 250, 460, 500, panelEdge);
+        drawUiRect(centerX - 226, centerY - 246, 452, 492, panel);
+        drawText("RECIPE BOOK", centerX, centerY + 205, 3, white, true);
+        for (std::size_t i = 0; i < mc::Crafting::recipeCount(); ++i) {
+            const mc::Recipe& recipe = mc::Crafting::recipe(i);
+            int rowY = centerY + 112 - static_cast<int>(i) * 36;
+            bool available = mc::Crafting::canCraft(inventory, i);
+            drawButton(centerX - 200, rowY, 400, 26, recipe.name, available);
+        }
+        drawButton(centerX - 210, centerY - 220, 420, 34, "BACK", true);
+    }
+
+    if (uiScreen == UiScreen::Pause || uiScreen == UiScreen::Settings) {
+        const int panelWidth = uiScreen == UiScreen::Pause ? 360 : 430;
+        const int panelHeight = uiScreen == UiScreen::Pause ? 340 : 500;
+        const int left = centerX - panelWidth / 2;
+        const int bottom = centerY - panelHeight / 2;
+        drawUiRect(left - 4, bottom - 4, panelWidth + 8, panelHeight + 8, {0.015f,0.02f,0.03f});
+        drawUiRect(left, bottom, panelWidth, panelHeight, panelEdge);
+        drawUiRect(left + 3, bottom + 3, panelWidth - 6, panelHeight - 6, panel);
+        drawUiRect(left + 16, bottom + panelHeight - 64, panelWidth - 32, 2, {0.34f,0.42f,0.50f});
+        drawText(uiScreen == UiScreen::Pause ? "GAME PAUSED" : "SETTINGS",
+                 centerX, bottom + panelHeight - 48, 3, white, true);
+        if (uiScreen == UiScreen::Pause) {
+            drawButton(centerX - 116, centerY + 48, 232, 38, "RESUME", true);
+            drawButton(centerX - 116, centerY + 1, 232, 38, "SAVE WORLD");
+            drawButton(centerX - 116, centerY - 46, 232, 38, "SETTINGS");
+            drawButton(centerX - 116, centerY - 93, 232, 38, "QUIT GAME");
+            drawText(lastCraftMessage.empty() ? "ESC  RESUME" : lastCraftMessage,
+                     centerX, bottom + 13, 1, muted, true);
+        } else {
+            drawText("FIELD OF VIEW", left + 28, centerY + 140, 2, white);
+            drawButton(left + 274, centerY + 127, 42, 34, "-");
+            drawText(std::to_string(static_cast<int>(fieldOfView)), left + 336, centerY + 140, 2, white, true);
+            drawButton(left + 370, centerY + 127, 42, 34, "+");
+            drawText("MOUSE SENSITIVITY", left + 28, centerY + 78, 2, white);
+            drawButton(left + 274, centerY + 65, 42, 34, "-");
+            drawText(std::to_string(static_cast<int>(mouseSensitivity * 1000.0f)),
+                     left + 336, centerY + 78, 2, white, true);
+            drawButton(left + 370, centerY + 65, 42, 34, "+");
+            drawText("RENDER DISTANCE", left + 28, centerY + 16, 2, white);
+            drawButton(left + 274, centerY + 3, 42, 34, "-");
+            drawText(std::to_string(renderDistanceChunks), left + 336, centerY + 16, 2, white, true);
+            drawButton(left + 370, centerY + 3, 42, 34, "+");
+            drawText("DEBUG INFO", left + 28, centerY - 46, 2, white);
+            drawButton(left + 274, centerY - 59, 138, 34, showDebugInfo ? "ON" : "OFF", showDebugInfo);
+            drawText("VIEW BOBBING", left + 28, centerY - 108, 2, white);
+            drawButton(left + 274, centerY - 121, 138, 34, viewBobbing ? "ON" : "OFF", viewBobbing);
+            drawButton(centerX - 116, bottom + 17, 232, 38, "BACK", true);
         }
     }
+
+    if (uiScreen != UiScreen::Gameplay) {
+        glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+        return;
+    }
+
+    if (!inventoryOpen) {
+        drawUiRect(centerX - 1, centerY - 10, 3, 21, {0.015f,0.02f,0.025f});
+        drawUiRect(centerX - 10, centerY - 1, 21, 3, {0.015f,0.02f,0.025f});
+        drawUiRect(centerX, centerY - 8, 1, 17, white);
+        drawUiRect(centerX - 8, centerY, 17, 1, white);
+        if (miningProgress > 0.0f) {
+            drawUiRect(centerX - 42, centerY - 24, 84, 5, {0.025f,0.03f,0.04f});
+            drawUiRect(centerX - 41, centerY - 23,
+                       static_cast<int>(82 * std::clamp(miningProgress, 0.0f, 1.0f)), 3,
+                       {0.94f,0.72f,0.20f});
+        }
+    }
+
+    const int hotbarBox = 48;
+    const int hotbarGap = 4;
+    const int hotbarTotal = HOTBAR_SIZE * hotbarBox + (HOTBAR_SIZE - 1) * hotbarGap;
+    const int hotbarStart = (screenWidth - hotbarTotal) / 2;
+    const int hotbarY = 18;
+    drawUiRect(hotbarStart - 7, hotbarY - 7, hotbarTotal + 14, hotbarBox + 14, panelEdge);
+    drawUiRect(hotbarStart - 5, hotbarY - 5, hotbarTotal + 10, hotbarBox + 10, panel);
+
+    auto drawSlot = [&](int x, int y, int box, const mc::ItemStack& stack,
+                        bool selected, std::size_t slotIndex, int hotbarNumber) {
+        drawUiRect(x, y, box, box, selected ? glm::vec3(0.96f,0.76f,0.25f) : panelEdge);
+        drawUiRect(x + 2, y + 2, box - 4, box - 4, selected ? glm::vec3(0.25f,0.20f,0.10f) : slotColor);
+        drawUiRect(x + 4, y + 4, box - 8, box - 8, slotInner);
+        if (hotbarNumber > 0)
+            drawUiDigit(hotbarNumber, x + 5, y + box - 11, 1, muted);
+        if (stack.itemId > 0 && stack.count > 0) {
+            int iconSize = box >= 46 ? 26 : 22;
+            drawUiItemIcon(x + (box - iconSize) / 2, y + (box - iconSize) / 2 + 1, stack.itemId);
+            drawUiNumber(stack.count, x + box - 4, y + 4, 1, white);
+            int maximum = mc::Items::maxDurability(stack.itemId);
+            if (maximum > 0) {
+                float ratio = static_cast<float>(inventory.durability(slotIndex)) / maximum;
+                int barWidth = static_cast<int>((box - 10) * std::clamp(ratio, 0.0f, 1.0f));
+                drawUiRect(x + 5, y + 3, box - 10, 3, {0.025f,0.025f,0.03f});
+                glm::vec3 durabilityColor = ratio > 0.5f ? glm::vec3(0.25f,0.82f,0.34f) :
+                    (ratio > 0.2f ? glm::vec3(0.91f,0.68f,0.18f) : glm::vec3(0.90f,0.22f,0.18f));
+                drawUiRect(x + 5, y + 3, barWidth, 3, durabilityColor);
+            }
+        }
+    };
+
+    if (inventoryOpen) {
+        const int box = 42;
+        const int gap = 5;
+        const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
+        const int start = (screenWidth - total) / 2;
+        drawUiRect(start - 11, 68, total + 22, 160, panelEdge);
+        drawUiRect(start - 9, 70, total + 18, 156, panel);
+        drawUiRect(start - 2, 218, total + 4, 2, {0.30f,0.38f,0.46f});
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 8; ++column) {
+                int index = 8 + row * 8 + column;
+                int x = start + column * (box + gap);
+                int y = 18 + (3 - row) * (box + gap) + 12;
+                drawSlot(x, y, box, inventory.slot(static_cast<std::size_t>(index)),
+                         false, static_cast<std::size_t>(index), 0);
+            }
+        }
+        drawText("INVENTORY", centerX, 235, 2, white, true);
+        drawText("CLICK A SLOT TO SWAP", centerX, 53, 1, muted, true);
+    }
+
+    for (int i = 0; i < HOTBAR_SIZE; ++i) {
+        int x = hotbarStart + i * (hotbarBox + hotbarGap);
+        drawSlot(x, hotbarY, hotbarBox, inventory.slot(static_cast<std::size_t>(i)),
+                 i + 1 == selectedBlock, static_cast<std::size_t>(i), i + 1);
+    }
+
+    if (!inventoryOpen) {
+        const mc::ItemStack& selectedStack = inventory.slot(static_cast<std::size_t>(selectedBlock - 1));
+        if (selectedStack.itemId > 0)
+            drawText(uiItemName(selectedStack.itemId), centerX, hotbarY + hotbarBox + 29, 2, white, true);
+        const int iconY = hotbarY + hotbarBox + 13;
+        const int iconStart = centerX - 190;
+        for (int i = 0; i < 10; ++i) {
+            float healthPart = std::clamp((playerStats.health() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
+            float hungerPart = std::clamp((playerStats.hunger() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
+            drawSurvivalIcon(iconStart + i * 18, iconY, healthPart, false);
+            drawSurvivalIcon(centerX + 10 + i * 18, iconY, hungerPart, true);
+        }
+    }
+
+    if (inventoryOpen) {
+        drawUiRect(centerX - 54, screenHeight - 48, 108, 3, {0.85f,0.67f,0.22f});
+        drawUiRect(centerX - 53, screenHeight - 47, 106, 1, {0.28f,0.34f,0.40f});
+    }
+
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
+}
+std::string inventorySummary() {
+    std::string summary;
+    for (std::size_t i = 0; i < mc::InventorySize; ++i) {
+        const mc::ItemStack& stack = inventory.slot(i);
+        if (stack.itemId <= 0 || stack.count <= 0) continue;
+        summary += " " + std::to_string(stack.itemId) + "x" + std::to_string(stack.count);
+    }
+    return summary;
 }
 
 void framebufferCallback(GLFWwindow*, int w, int h) {
@@ -832,7 +1782,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.1", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 27.6", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -840,10 +1790,11 @@ int main() {
     }
 
     glfwMakeContextCurrent(window);
+    loadSettings();
     glfwSetFramebufferSizeCallback(window, framebufferCallback);
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwSwapInterval(1);
 
     glewExperimental = GL_TRUE;
@@ -862,11 +1813,7 @@ int main() {
     createShader();
     setupGeometry();
     createAtlas();
-    generateWorld();
-    if (loadWorld()) std::cout << "Saved world loaded.\n";
-    else std::cout << "Generated a new world.\n";
     for (ChunkMesh& chunk : chunks) chunk.dirty = true;
-    rebuildDirtyChunks();
 
     double lastFrame = glfwGetTime();
     double titleTimer = 0.0;
@@ -878,10 +1825,24 @@ int main() {
         double now = glfwGetTime();
         float dt = static_cast<float>(std::min(now - lastFrame, 0.05));
         lastFrame = now;
-        worldTime += dt;
+        if (uiScreen == UiScreen::Gameplay) worldTime += dt;
+        handSwingTime = std::max(0.0f, handSwingTime - dt * 3.8f);
+        if (uiScreen == UiScreen::Gameplay && playerMoving)
+            walkAnimationTime += dt * (playerSprinting ? 1.7f : 1.0f);
 
         processInput(window, dt);
-        processBlocks(window);
+        processUiMouse(window);
+        processInventoryMouse(window);
+        processBlocks(window, dt);
+        if (uiScreen == UiScreen::Gameplay) rebuildDirtyChunks();
+        if (uiScreen == UiScreen::Gameplay) playerStats.tick(dt, playerMoving, playerSprinting);
+        if (!playerStats.alive()) {
+            player = glm::vec3(64.0f, terrainHeight(64, 64) + 2.2f, 64.0f);
+            velocity = glm::vec3(0.0f);
+            playerStats.set(mc::PlayerStats::MaxHealth, 12.0f);
+            lastCraftMessage = "Respawned";
+        }
+        if (uiScreen == UiScreen::Gameplay) updateDrops(dt);
 
         float daylight = 0.5f + 0.5f * std::sin(worldTime * 0.04f);
         glm::vec3 nightSky(0.025f,0.035f,0.09f);
@@ -890,13 +1851,20 @@ int main() {
         glClearColor(sky.r, sky.g, sky.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glm::mat4 projection = glm::perspective(glm::radians(76.0f),
-            static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f, 120.0f);
+        glm::mat4 projection = glm::perspective(glm::radians(fieldOfView),
+            static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f,
+            static_cast<float>(renderDistanceChunks * CHUNK_SIZE));
         glm::vec3 front = cameraFront();
-        glm::mat4 view = glm::lookAt(player, player + front, glm::vec3(0,1,0));
+        glm::vec3 cameraPosition = player;
+        if (viewBobbing && uiScreen == UiScreen::Gameplay && playerMoving)
+            cameraPosition.y += std::sin(walkAnimationTime * 10.0f) * 0.045f;
+        glm::mat4 view = glm::lookAt(cameraPosition, cameraPosition + front, glm::vec3(0,1,0));
 
-        visibleChunks = renderWorld(view, projection, player, sky);
-        renderTarget(view, projection, player, sky);
+        visibleChunks = renderWorld(view, projection, cameraPosition, sky);
+        renderDrops(view, projection, cameraPosition, sky);
+        renderTarget(view, projection, cameraPosition, sky);
+        if (uiScreen == UiScreen::Gameplay && !inventoryOpen)
+            renderFirstPersonHand(view, projection, cameraPosition);
         drawUI();
 
         glfwSwapBuffers(window);
@@ -908,16 +1876,30 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 27.1 | " + std::to_string(static_cast<int>(fps)) +
-                " FPS | Chunks " + std::to_string(visibleChunks) + "/" + std::to_string(CHUNK_COUNT) +
-                " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
-                std::to_string(static_cast<int>(player.y)) + "," +
-                std::to_string(static_cast<int>(player.z));
+            std::string title = "MiniCraft3D 27.6";
+            if (showDebugInfo) {
+                title += " | " + std::to_string(static_cast<int>(fps)) + " FPS | Chunks " +
+                    std::to_string(visibleChunks) + "/" + std::to_string(infiniteWorld.loadedCount()) +
+                    " | XYZ " + std::to_string(static_cast<int>(player.x)) + "," +
+                    std::to_string(static_cast<int>(player.y)) + "," +
+                    std::to_string(static_cast<int>(player.z));
+            }
+            title += (inventoryOpen ? " | Inventory" : "") +
+                std::string(" | HP:") + std::to_string(static_cast<int>(playerStats.health())) +
+                " Hunger:" + std::to_string(static_cast<int>(playerStats.hunger())) +
+                " | Items:" + inventorySummary() +
+                (lastCraftMessage.empty() ? "" : " | " + lastCraftMessage);
             glfwSetWindowTitle(window, title.c_str());
         }
     }
 
-    saveWorld();
+    if (worldInitialized) saveWorld();
+    for (auto& entry : streamedMeshes) {
+        glDeleteVertexArrays(1, &entry.second.vao);
+        glDeleteBuffers(1, &entry.second.vbo);
+    }
+    streamedMeshes.clear();
+    saveSettings();
     glDeleteTextures(1, &atlasTexture);
     for (ChunkMesh& chunk : chunks) {
         glDeleteVertexArrays(1, &chunk.vao);
