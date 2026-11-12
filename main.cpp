@@ -698,7 +698,7 @@ void saveWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    Header header{{'M','C','3','D','2','7','3','\0'}, WORLD_X, WORLD_Y, WORLD_Z};
+    Header header{{'M','C','3','D','I','N','F','1'}, WORLD_X, WORLD_Y, WORLD_Z};
     float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
     std::error_code directoryError;
     std::filesystem::path savePath(currentWorldPath);
@@ -744,7 +744,8 @@ bool loadWorld() {
     bool oldFormat = std::memcmp(header.magic, "MC3D271", 7) == 0;
     bool currentFormat = std::memcmp(header.magic, "MC3D272", 7) == 0;
     bool survivalFormat = std::memcmp(header.magic, "MC3D273", 7) == 0;
-    if (!file || (!oldFormat && !currentFormat && !survivalFormat) ||
+    bool infiniteFormat = std::memcmp(header.magic, "MC3DINF1", 8) == 0;
+    if (!file || (!oldFormat && !currentFormat && !survivalFormat && !infiniteFormat) ||
         header.width == 0 || header.height == 0 || header.depth == 0 ||
         header.width > 512 || header.height > 256 || header.depth > 512)
         return false;
@@ -765,10 +766,10 @@ bool loadWorld() {
     std::array<int, mc::InventorySize> loadedDurability{};
     float loadedStats[2] = {mc::PlayerStats::MaxHealth, mc::PlayerStats::MaxHunger};
     std::vector<mc::ItemDrop> loadedDrops;
-    if (currentFormat || survivalFormat) {
+    if (currentFormat || survivalFormat || infiniteFormat) {
         file.read(reinterpret_cast<char*>(loadedInventory.data()),
                   static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
-        if (survivalFormat) {
+        if (survivalFormat || infiniteFormat) {
             file.read(reinterpret_cast<char*>(loadedDurability.data()),
                       static_cast<std::streamsize>(sizeof(int) * mc::InventorySize));
             file.read(reinterpret_cast<char*>(loadedStats), sizeof(loadedStats));
@@ -803,6 +804,12 @@ bool loadWorld() {
     }
 
     std::memset(world, 0, sizeof(world));
+    infiniteWorld = mc::world::InfiniteWorld(currentWorldPath + ".chunks");
+    for (auto& entry : streamedMeshes) {
+        glDeleteVertexArrays(1, &entry.second.vao);
+        glDeleteBuffers(1, &entry.second.vbo);
+    }
+    streamedMeshes.clear();
     generateWorld();
     const int offsetX = std::max(0, (WORLD_X - static_cast<int>(header.width)) / 2);
     const int offsetZ = std::max(0, (WORLD_Z - static_cast<int>(header.depth)) / 2);
@@ -815,12 +822,15 @@ bool loadWorld() {
                 std::size_t index = (static_cast<std::size_t>(x) * header.height + y) *
                     header.depth + z;
                 world[x + offsetX][y][z + offsetZ] = loaded[index];
+                if (!infiniteFormat)
+                    infiniteWorld.setBlock(x + offsetX, y, z + offsetZ, static_cast<std::uint8_t>(loaded[index]));
             }
 
-    player = glm::vec3(
-        std::clamp(playerData[0] + offsetX, 1.0f, static_cast<float>(WORLD_X - 2)),
-        std::clamp(playerData[1], 1.0f, static_cast<float>(WORLD_Y - 1)),
-        std::clamp(playerData[2] + offsetZ, 1.0f, static_cast<float>(WORLD_Z - 2)));
+    player = infiniteFormat
+        ? glm::vec3(playerData[0], std::clamp(playerData[1], 1.0f, static_cast<float>(mc::world::WorldHeight - 1)), playerData[2])
+        : glm::vec3(std::clamp(playerData[0] + offsetX, 1.0f, static_cast<float>(WORLD_X - 2)),
+                    std::clamp(playerData[1], 1.0f, static_cast<float>(mc::world::WorldHeight - 1)),
+                    std::clamp(playerData[2] + offsetZ, 1.0f, static_cast<float>(WORLD_Z - 2)));
     yaw = playerData[3];
     pitch = std::clamp(playerData[4], -89.0f, 89.0f);
     velocity = glm::vec3(0.0f);
@@ -832,6 +842,8 @@ bool loadWorld() {
         drop.z += static_cast<float>(offsetZ);
     }
     itemDrops = std::move(loadedDrops);
+    infiniteWorld.updateStreaming(static_cast<int>(std::floor(player.x)),
+        static_cast<int>(std::floor(player.z)), renderDistanceChunks);
     return true;
 }
 
