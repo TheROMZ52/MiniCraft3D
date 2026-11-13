@@ -8,6 +8,7 @@ on:
       - "main.cpp"
       - "src/**"
       - "tests/**"
+      - "tools/**"
       - "build.bat"
       - "README.md"
       - "textures/**"
@@ -21,6 +22,7 @@ on:
       - "main.cpp"
       - "src/**"
       - "tests/**"
+      - "tools/**"
       - "build.bat"
       - "README.md"
       - ".github/workflows/windows-build.yml"
@@ -57,13 +59,18 @@ jobs:
         run: |
           g++ tests/world_tests.cpp -o world-tests.exe -std=c++17 -Wall -Wextra
           ./world-tests.exe
+      - name: Test texture atlas
+        shell: msys2 {0}
+        run: |
+          g++ tests/atlas_tests.cpp -o atlas-tests.exe -std=c++17 -Wall -Wextra
+          ./atlas-tests.exe
       - name: Compile game
         shell: msys2 {0}
         run: g++ main.cpp src/gameplay/gameplay.cpp -o MiniCraft3D.exe -std=c++17 -O2 -Wall -Wextra -lglfw3 -lglew32 -lopengl32 -lgdi32 -luser32 -lshell32
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCraft3D-27.6-Windows
+          name: MiniCraft3D-28.0-Windows
           path: MiniCraft3D.exe
           if-no-files-found: error
       - name: Publish GitHub release

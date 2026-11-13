@@ -1,4 +1,4 @@
-# MiniCraft3D 27.6
+# MiniCraft3D 28.0
 
 A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core. Built from scratch without a game engine.
 
@@ -20,31 +20,47 @@ A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core
 - Render distance setting from 4 to 16 chunks, radial visibility filtering and frustum culling
 - OpenGL mesh generation per loaded chunk with hidden-face removal
 - Neighbor mesh invalidation when blocks change or adjacent chunks stream in
-- Vertex ambient occlusion, animated daylight and distance fog
 - Plains, forest, desert and snowy regions, caves, ores and trees
 - Chunk data saved separately from world/player metadata
 - Legacy 27.1, 27.2 and 27.3 saves are imported into the chunk-based world format
 
+## Minecraft-style visuals (28.0)
+
+- Procedurally generated 16 x 16 pixel-art textures: grass, dirt, stone, logs with bark and rings, leaves with cut-out holes, sand, snow, ore, planks, crafting table, sticks and all wooden and stone tools
+- Classic per-face shading, vertex ambient occlusion and distance fog that matches the sky
+- Sky with a square sun and moon, stars, drifting blocky clouds, sunset colors and a full day and night cycle
+- Block-break crack animation, black selection outline and breaking particles
+- First-person held blocks and extruded 3D tools, spinning item drops with textured models
+- Isometric block icons and sprite icons in the hotbar and inventory, bevelled slots, grey inventory panel
+- Dirt-tile menu background and bevelled buttons with text shadows
+
 ## Texture atlas
 
-The game loads `textures/atlas.ppm` at startup. If it is missing or invalid, the built-in atlas is used.
+The game builds its atlas at startup. If `textures/atlas.ppm` exists and is valid it replaces the built-in atlas. See `textures/README.md` for the format and how to regenerate it.
 
-The external atlas must be a PPM P3 or P6 image exactly **160 x 16 pixels**, containing ten horizontal 16 x 16 tiles in this order:
+The atlas is a PPM image of exactly **512 x 16 pixels** with thirty-two horizontal 16 x 16 tiles. Magenta (255, 0, 255) marks transparent pixels.
 
 | Tile | Texture |
 |---:|---|
 | 0 | Grass top |
 | 1 | Dirt |
 | 2 | Stone |
-| 3 | Log |
+| 3 | Log side |
 | 4 | Leaves |
 | 5 | Sand |
 | 6 | Snow |
 | 7 | Ore |
 | 8 | Grass side |
 | 9 | Planks |
-
-Keep each tile 16 x 16. The supplied atlas uses pixel-art shading and nearest-neighbor filtering; avoid gaps between tiles.
+| 10 | Log top |
+| 11 | Crafting table top |
+| 12 | Crafting table side |
+| 13 | Stick |
+| 14-15 | Wooden and stone pickaxe |
+| 16-17 | Wooden and stone axe |
+| 18-19 | Wooden and stone shovel |
+| 20-21 | Wooden and stone sword |
+| 22-31 | Block break stages 0-9 |
 
 ## Settings
 
@@ -90,4 +106,4 @@ Run `update.bat` to download the executable from the latest published GitHub rel
 
 ## Tests
 
-GitHub Actions runs gameplay-system tests, infinite-world coordinate and terrain tests, cross-chunk mesh invalidation tests, streaming/unloading tests and chunk persistence tests before compiling the Windows executable.
+GitHub Actions runs gameplay-system tests, infinite-world coordinate and terrain tests, cross-chunk mesh invalidation tests, streaming/unloading tests, chunk persistence tests and texture atlas tests before compiling the Windows executable.
