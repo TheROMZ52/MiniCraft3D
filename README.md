@@ -1,11 +1,12 @@
-# MiniCraft3D 28.0
+# MiniCraft3D 28.1
 
 A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core. Built from scratch without a game engine.
 
 ## Gameplay
 
 - Main menu, world selection, multiple save slots and Settings
-- 32-slot inventory, 8-slot hotbar and interactive recipe book
+- Minecraft-style inventory screen: 27 main slots, 9-slot hotbar, 2x2 crafting grid with result slot, armor column and player preview; left/right click, shift-click and stack splitting work like the original
+- Recipe book
 - Wooden and stone tools, durability, mining progression and harvest requirements
 - Health, hunger, sprint exhaustion, regeneration and starvation
 - Block drops, pickup, placement and persistent chunk saves
@@ -17,7 +18,8 @@ A Minecraft-inspired voxel survival sandbox written in C++17 and OpenGL 3.3 Core
 - 16 x 16 chunks with a 64-block vertical range
 - Dynamic chunk streaming around the player, including negative world coordinates
 - Automatic chunk unloading outside the active streaming radius
-- Render distance setting from 4 to 16 chunks, radial visibility filtering and frustum culling
+- Render distance from 2 to 32 chunks (default 12) with Minecraft-style fog, nearest-first budgeted chunk loading and time-sliced meshing
+- Padded-array chunk mesher that skips buried blocks and empty air
 - OpenGL mesh generation per loaded chunk with hidden-face removal
 - Neighbor mesh invalidation when blocks change or adjacent chunks stream in
 - Plains, forest, desert and snowy regions, caves, ores and trees
@@ -106,4 +108,4 @@ Run `update.bat` to download the executable from the latest published GitHub rel
 
 ## Tests
 
-GitHub Actions runs gameplay-system tests, infinite-world coordinate and terrain tests, cross-chunk mesh invalidation tests, streaming/unloading tests, chunk persistence tests and texture atlas tests before compiling the Windows executable.
+GitHub Actions runs gameplay-system tests, inventory crafting-grid tests, infinite-world coordinate and terrain tests, cross-chunk mesh invalidation tests, streaming/unloading tests, chunk persistence tests and texture atlas tests before compiling the Windows executable.

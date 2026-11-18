@@ -1,23 +1,26 @@
-# MiniCraft3D 28.0 release notes
+# MiniCraft3D 28.1 release notes
 
-## Visuals
-- New Minecraft-style 16 x 16 pixel-art texture atlas (32 tiles), generated in code and exported to `textures/atlas.ppm`
-- New tiles: log top rings, crafting table, sticks, six tools, ten block-break stages
-- Leaves are cut-out textures with holes; grass sides have an irregular green fringe
-- Fixed texture orientation on block sides so grass fringes sit at the top
-- Classic Minecraft face shading, softer ambient occlusion, fog that follows the sky colour
-- New sky: square sun and moon, stars, drifting blocky clouds, sunset gradient, day and night cycle (8 minutes)
-- Block-break cracks, black selection outline, break particles
-- Held blocks and extruded 3D tools in first person; hand no longer clips into walls
-- Item drops render as spinning textured blocks and tools
+## Render distance
+- Range 2-32 chunks, default 12; fog starts at 70% of the distance and fully hides the edge like Minecraft
+- Chunks load nearest-first with a per-frame budget instead of all at once, so moving no longer stutters
+- Mesh rebuilds are time-sliced (5 ms per frame), prioritised by distance and wait until all four neighbours exist
+- New padded-array mesher: no hash lookups per block, skips air above the surface and fully buried blocks
+- Rendering iterates loaded meshes directly (no per-frame sort); corners that are always hidden by fog are skipped
+- Far plane follows the render distance
 
-## Interface
-- Dirt-tile menu background, bevelled grey buttons, text shadows
-- Isometric block icons and sprite icons in hotbar and inventory, bevelled slots, white selection frame
-- Grey inventory panel; removed the mining progress bar in favour of break cracks
+## World generation
+- Trees are placed on a spaced grid (one candidate per 6x6 cell) instead of rolling every column
+- Forest biome is rarer and less dense; plains and snow have occasional trees
+- Fixes the world being covered by merged leaf canopies
+
+## Inventory
+- Exact Minecraft survival inventory layout: armor column, player preview, 2x2 crafting grid with result slot, 3x9 storage and 9-slot hotbar
+- Cursor stack: left click picks up or places, right click splits or places one, shift-click moves between hotbar and storage or crafts the whole stack
+- Slot hover highlight, item name tooltip, durability bars only on damaged tools, dimmed background
+- Items on the cursor and in the crafting grid return to the inventory (or drop) when the screen closes
+- Minecraft-style hotbar HUD with white selector, 9 slots and keys 1-9
+- Old saves (32 slots) are migrated automatically; new saves use the 36-slot format
 
 ## Technical
-- Atlas moved to `src/render/atlas.hpp`; `tools/atlas_dump.cpp` regenerates `textures/atlas.ppm`
-- External atlas must now be 512 x 16 and uses magenta as the transparency key
-- Added `tests/atlas_tests.cpp` and a CI step for it
-- Version bumped to 28.0
+- Inventory is now 36 slots; added `Inventory::setSlot`, `Crafting::matchGrid`
+- Added world tests for budgeted streaming and tree density, gameplay tests for grid matching

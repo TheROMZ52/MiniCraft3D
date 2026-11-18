@@ -29,7 +29,7 @@ int main() {
 
     mc::Inventory full;
     assert(full.addItem(4, 1) == 0);
-    for (int id = 100; id < 131; ++id) assert(full.addItem(id, 64) == 0);
+    for (int id = 100; id < 100 + static_cast<int>(mc::InventorySize) - 1; ++id) assert(full.addItem(id, 64) == 0);
     assert(!mc::Crafting::craft(full, 0));
     assert(full.countItem(4) == 1);
     assert(full.countItem(9) == 0);
@@ -101,5 +101,22 @@ int main() {
     assert(stats.health() == 19.0f);
     stats.damage(100.0f);
     assert(!stats.alive());
+
+    assert(mc::InventorySize == 36 && mc::HotbarSize == 9);
+    mc::ItemStack grid[4] = {{4, 1}, {}, {}, {}};
+    int planks = mc::Crafting::matchGrid(grid, 4);
+    assert(planks >= 0 && mc::Crafting::recipe(static_cast<std::size_t>(planks)).outputId == 9);
+    grid[0] = {9, 2};
+    int sticks = mc::Crafting::matchGrid(grid, 4);
+    assert(sticks >= 0 && mc::Crafting::recipe(static_cast<std::size_t>(sticks)).outputId == 10);
+    grid[0] = {9, 1};
+    assert(mc::Crafting::matchGrid(grid, 4) == -1);
+    mc::ItemStack empty[4]{};
+    assert(mc::Crafting::matchGrid(empty, 4) == -1);
+    mc::Inventory placed;
+    placed.setSlot(35, {20, 1}, 10);
+    assert(placed.slot(35).itemId == 20 && placed.durability(35) == 10);
+    placed.setSlot(35, {}, 0);
+    assert(placed.slot(35).itemId == 0);
     return 0;
 }

@@ -157,6 +157,20 @@ void Inventory::swapSlots(std::size_t first, std::size_t second) {
     std::swap(durability_[first], durability_[second]);
 }
 
+void Inventory::setSlot(std::size_t index, ItemStack stack, int durability) {
+    if (index >= slots_.size()) return;
+    if (stack.itemId <= 0 || stack.count <= 0) {
+        slots_[index] = {};
+        durability_[index] = 0;
+        return;
+    }
+    const int limit = Items::isTool(stack.itemId) ? 1 : StackLimit;
+    stack.count = std::clamp(stack.count, 1, limit);
+    slots_[index] = stack;
+    const int maximum = Items::maxDurability(stack.itemId);
+    durability_[index] = maximum == 0 ? 0 : std::clamp(durability, 1, maximum);
+}
+
 void Inventory::replace(const std::array<ItemStack, InventorySize>& slots) {
     std::array<int, InventorySize> durability{};
     for (std::size_t i = 0; i < slots.size(); ++i)
@@ -217,6 +231,35 @@ bool Crafting::craft(Inventory& inventory, std::size_t index) {
     }
     inventory = result;
     return true;
+}
+
+int Crafting::matchGrid(const ItemStack* items, std::size_t count) {
+    int ids[16]{};
+    int totals[16]{};
+    std::size_t kinds = 0;
+    for (std::size_t i = 0; i < count && i < 16; ++i) {
+        if (items[i].itemId <= 0 || items[i].count <= 0) continue;
+        std::size_t k = 0;
+        while (k < kinds && ids[k] != items[i].itemId) ++k;
+        if (k == kinds) {
+            ids[kinds] = items[i].itemId;
+            ++kinds;
+        }
+        totals[k] += items[i].count;
+    }
+    if (kinds == 0) return -1;
+    for (std::size_t r = 0; r < recipeCount(); ++r) {
+        const Recipe& selected = Recipes[r];
+        if (selected.ingredientCount != kinds) continue;
+        bool matches = true;
+        for (std::size_t i = 0; i < selected.ingredientCount && matches; ++i) {
+            std::size_t k = 0;
+            while (k < kinds && ids[k] != selected.ingredients[i].itemId) ++k;
+            matches = k < kinds && totals[k] >= selected.ingredients[i].count;
+        }
+        if (matches) return static_cast<int>(r);
+    }
+    return -1;
 }
 
 int Crafting::craftFirstAvailable(Inventory& inventory) {

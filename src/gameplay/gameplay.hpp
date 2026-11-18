@@ -7,8 +7,8 @@
 
 namespace mc {
 
-constexpr std::size_t InventorySize = 32;
-constexpr std::size_t HotbarSize = 8;
+constexpr std::size_t InventorySize = 36;
+constexpr std::size_t HotbarSize = 9;
 constexpr int StackLimit = 64;
 
 enum class ToolType : uint8_t {
@@ -67,6 +67,7 @@ public:
     int durability(std::size_t index) const;
     bool damageItem(std::size_t index, int amount = 1);
     void swapSlots(std::size_t first, std::size_t second);
+    void setSlot(std::size_t index, ItemStack stack, int durability);
     void replace(const std::array<ItemStack, InventorySize>& slots);
     void replace(const std::array<ItemStack, InventorySize>& slots,
                  const std::array<int, InventorySize>& durability);
@@ -84,6 +85,7 @@ public:
     static bool canCraft(const Inventory& inventory, std::size_t index);
     static bool craft(Inventory& inventory, std::size_t index);
     static int craftFirstAvailable(Inventory& inventory);
+    static int matchGrid(const ItemStack* items, std::size_t count);
 };
 
 class PlayerStats {

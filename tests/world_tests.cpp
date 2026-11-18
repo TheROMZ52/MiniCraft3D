@@ -79,6 +79,45 @@ int main() {
     InfiniteWorld reloaded(directory);
     assert(reloaded.getBlock(-1, surface + 1, -1) == 9);
 
+    {
+        const std::filesystem::path budgetDirectory = directory.string() + "_budget";
+        std::filesystem::remove_all(budgetDirectory, error);
+        InfiniteWorld budgeted(budgetDirectory);
+        assert(budgeted.updateStreaming(0, 0, 8, 5) == 5);
+        assert(budgeted.loadedCount() == 5);
+        assert(budgeted.isLoaded({0, 0}));
+        assert(!budgeted.isLoaded({8, 0}));
+        assert(budgeted.updateStreaming(0, 0, 8, 5) == 5);
+        assert(budgeted.loadedCount() == 10);
+        assert(budgeted.peekChunk({0, 0}) != nullptr);
+        assert(budgeted.peekChunk({50, 50}) == nullptr);
+        assert(budgeted.hasLoadedNeighbors({0, 0}) == (budgeted.isLoaded({1, 0}) && budgeted.isLoaded({-1, 0}) &&
+                                                       budgeted.isLoaded({0, 1}) && budgeted.isLoaded({0, -1})));
+        budgeted.updateStreaming(0, 0, 4);
+        assert(budgeted.hasLoadedNeighbors({0, 0}));
+        std::filesystem::remove_all(budgetDirectory, error);
+    }
+
+    {
+        const std::filesystem::path forestDirectory = directory.string() + "_trees";
+        std::filesystem::remove_all(forestDirectory, error);
+        InfiniteWorld forest(forestDirectory);
+        long logBlocks = 0;
+        int sampled = 0;
+        for (int cx = -24; cx < 24; cx += 3) {
+            for (int cz = -24; cz < 24; cz += 3) {
+                forest.getBlock(cx * ChunkSize, 10, cz * ChunkSize);
+                const Chunk* chunk = forest.peekChunk({cx, cz});
+                assert(chunk != nullptr);
+                for (std::uint8_t id : chunk->blocks) if (id == 4) ++logBlocks;
+                ++sampled;
+            }
+        }
+        assert(static_cast<double>(logBlocks) / sampled < 14.0);
+        assert(logBlocks > 0);
+        std::filesystem::remove_all(forestDirectory, error);
+    }
+
     std::filesystem::remove_all(directory, error);
     return 0;
 }

@@ -70,7 +70,7 @@ inline int biomeAt(int x, int z) noexcept {
     const float moisture = std::sin((x + z) * 0.0048f) + std::cos((x - z) * 0.0033f);
     if (temperature > 0.8f && moisture < -0.1f) return 1;
     if (temperature < -0.72f) return 2;
-    if (moisture > 0.62f) return 3;
+    if (moisture > 0.9f) return 3;
     return 0;
 }
 
@@ -140,13 +140,21 @@ public:
         return true;
     }
 
-    void updateStreaming(int centerX, int centerZ, int renderDistance) {
-        renderDistance = std::clamp(renderDistance, 2, 32);
+    int updateStreaming(int centerX, int centerZ, int renderDistance, int maxNewChunks = 1 << 30) {
+        renderDistance = std::clamp(renderDistance, 2, 40);
         const ChunkPos center = chunkOf(centerX, centerZ);
-        for (int dz = -renderDistance; dz <= renderDistance; ++dz) {
-            for (int dx = -renderDistance; dx <= renderDistance; ++dx) {
-                if (dx * dx + dz * dz > renderDistance * renderDistance) continue;
-                getOrCreate({center.x + dx, center.z + dz});
+        int created = 0;
+        const int limit = renderDistance * renderDistance;
+        for (int ring = 0; ring <= renderDistance && created < maxNewChunks; ++ring) {
+            for (int dz = -ring; dz <= ring && created < maxNewChunks; ++dz) {
+                const int step = (std::abs(dz) == ring) ? 1 : std::max(1, 2 * ring);
+                for (int dx = -ring; dx <= ring && created < maxNewChunks; dx += step) {
+                    if (dx * dx + dz * dz > limit) continue;
+                    const ChunkPos position{center.x + dx, center.z + dz};
+                    if (isLoaded(position)) continue;
+                    getOrCreate(position);
+                    ++created;
+                }
             }
         }
         const int unloadDistance = renderDistance + 2;
@@ -160,6 +168,17 @@ public:
                 ++it;
             }
         }
+        return created;
+    }
+
+    const Chunk* peekChunk(ChunkPos position) const noexcept {
+        const auto found = chunks_.find(position);
+        return found == chunks_.end() ? nullptr : &found->second;
+    }
+
+    bool hasLoadedNeighbors(ChunkPos position) const noexcept {
+        return isLoaded({position.x + 1, position.z}) && isLoaded({position.x - 1, position.z}) &&
+               isLoaded({position.x, position.z + 1}) && isLoaded({position.x, position.z - 1});
     }
 
     std::vector<ChunkPos> visibleChunks(int centerX, int centerZ, int renderDistance) const {
@@ -232,6 +251,23 @@ private:
         return 3;
     }
 
+    static constexpr int TreeCell = 6;
+
+    static int cellFloor(int a, int b) noexcept {
+        int q = a / b;
+        if ((a % b != 0) && ((a < 0) != (b < 0))) --q;
+        return q;
+    }
+
+    static bool treeAnchor(int cellX, int cellZ, int& anchorX, int& anchorZ) noexcept {
+        anchorX = cellX * TreeCell + 1 + static_cast<int>(hash(cellX, cellZ, 91) % (TreeCell - 2));
+        anchorZ = cellZ * TreeCell + 1 + static_cast<int>(hash(cellX, cellZ, 92) % (TreeCell - 2));
+        const int biome = biomeAt(anchorX, anchorZ);
+        if (biome == 1) return false;
+        const std::uint32_t chance = biome == 3 ? 45u : (biome == 2 ? 4u : 3u);
+        return hash(cellX, cellZ, 93) % 100u < chance;
+    }
+
     static Chunk generate(ChunkPos position) {
         Chunk chunk;
         chunk.position = position;
@@ -247,11 +283,11 @@ private:
             }
         }
 
-        for (int anchorX = originX - 2; anchorX < originX + ChunkSize + 2; ++anchorX) {
-            for (int anchorZ = originZ - 2; anchorZ < originZ + ChunkSize + 2; ++anchorZ) {
+        for (int cellX = cellFloor(originX - 2, TreeCell); cellX <= cellFloor(originX + ChunkSize + 1, TreeCell); ++cellX) {
+            for (int cellZ = cellFloor(originZ - 2, TreeCell); cellZ <= cellFloor(originZ + ChunkSize + 1, TreeCell); ++cellZ) {
+                int anchorX = 0, anchorZ = 0;
+                if (!treeAnchor(cellX, cellZ, anchorX, anchorZ)) continue;
                 const int biome = biomeAt(anchorX, anchorZ);
-                const std::uint32_t roll = hash(anchorX, anchorZ, 77) % 100u;
-                if (biome == 1 || roll > (biome == 3 ? 19u : 8u)) continue;
                 const int ground = terrainHeight(anchorX, anchorZ);
                 if (generatedBlock(anchorX, ground, anchorZ) != 1) continue;
                 const int trunk = biome == 3 ? 5 : 4;

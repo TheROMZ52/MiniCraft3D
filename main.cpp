@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -30,7 +31,7 @@ constexpr int CHUNK_SIZE = 16;
 constexpr int CHUNKS_X = WORLD_X / CHUNK_SIZE;
 constexpr int CHUNKS_Z = WORLD_Z / CHUNK_SIZE;
 constexpr int CHUNK_COUNT = CHUNKS_X * CHUNKS_Z;
-constexpr int HOTBAR_SIZE = 8;
+constexpr int HOTBAR_SIZE = 9;
 
 int world[WORLD_X][WORLD_Y][WORLD_Z]{};
 glm::vec3 player(64.0f, 12.0f, 64.0f);
@@ -54,6 +55,7 @@ bool playerSprinting = false;
 glm::ivec3 miningTarget(-999);
 float miningProgress = 0.0f;
 bool inventoryOpen = false;
+void closeInventoryScreen();
 bool inventoryWasDown = false;
 bool craftWasDown = false;
 bool inventoryClickWasDown = false;
@@ -70,7 +72,7 @@ std::vector<std::string> worldNames;
 float mouseSensitivity = 0.105f;
 float fieldOfView = 76.0f;
 bool showDebugInfo = true;
-int renderDistanceChunks = 8;
+int renderDistanceChunks = 12;
 bool viewBobbing = true;
 float walkAnimationTime = 0.0f;
 float handSwingTime = 0.0f;
@@ -583,7 +585,7 @@ bool insideWorld(int x, int y, int z) {
 void generateWorld() {
     std::memset(world, 0, sizeof(world));
     streamedMeshes.clear();
-    infiniteWorld.updateStreaming(0, 0, renderDistanceChunks);
+    infiniteWorld.updateStreaming(0, 0, std::min(renderDistanceChunks, 4) + 2);
     player = glm::vec3(0.0f, mc::world::InfiniteWorld::heightAt(0, 0) + 2.2f, 0.0f);
     velocity = glm::vec3(0.0f);
 }
@@ -592,7 +594,22 @@ bool meshSolidAt(int x, int y, int z) {
     return infiniteWorld.getBlock(x, y, z) != 0;
 }
 
+constexpr int MeshPad = CHUNK_SIZE + 2;
+const std::uint8_t* meshPadData = nullptr;
+int meshPadOriginX = 0;
+int meshPadOriginZ = 0;
+
 bool meshOpaqueAt(int x, int y, int z) {
+    if (meshPadData) {
+        const int px = x - meshPadOriginX + 1;
+        const int pz = z - meshPadOriginZ + 1;
+        if (y < 0) return true;
+        if (y >= mc::world::WorldHeight) return false;
+        if (px >= 0 && px < MeshPad && pz >= 0 && pz < MeshPad) {
+            const int id = meshPadData[(px * mc::world::WorldHeight + y) * MeshPad + pz];
+            return id != 0 && id != 5;
+        }
+    }
     const int id = infiniteWorld.getBlock(x, y, z);
     return id != 0 && id != 5;
 }
@@ -840,14 +857,40 @@ void rebuildStreamedChunk(mc::world::ChunkPos position) {
     vertices.reserve(24000);
     const int originX = position.x * CHUNK_SIZE;
     const int originZ = position.z * CHUNK_SIZE;
+    constexpr int height = mc::world::WorldHeight;
+    static std::uint8_t pad[MeshPad * height * MeshPad];
+    for (int cx = -1; cx <= 1; ++cx) {
+        for (int cz = -1; cz <= 1; ++cz) {
+            const mc::world::Chunk* source = infiniteWorld.peekChunk({position.x + cx, position.z + cz});
+            for (int lx = 0; lx < CHUNK_SIZE; ++lx) {
+                const int px = cx * CHUNK_SIZE + lx + 1;
+                if (px < 0 || px >= MeshPad) continue;
+                for (int lz = 0; lz < CHUNK_SIZE; ++lz) {
+                    const int pz = cz * CHUNK_SIZE + lz + 1;
+                    if (pz < 0 || pz >= MeshPad) continue;
+                    std::uint8_t* column = &pad[(px * height) * MeshPad + pz];
+                    for (int y = 0; y < height; ++y)
+                        column[y * MeshPad] = source ? source->blocks[mc::world::Chunk::index(lx, y, lz)] : 0;
+                }
+            }
+        }
+    }
+    meshPadData = pad;
+    meshPadOriginX = originX;
+    meshPadOriginZ = originZ;
+    auto padAt = [&](int px, int y, int pz) {
+        return pad[(px * height + y) * MeshPad + pz];
+    };
     const int neighbor[6][3] = {{0,0,1},{0,0,-1},{0,1,0},{0,-1,0},{1,0,0},{-1,0,0}};
     for (int x = 0; x < CHUNK_SIZE; ++x) {
-        for (int y = 0; y < mc::world::WorldHeight; ++y) {
-            for (int z = 0; z < CHUNK_SIZE; ++z) {
+        for (int z = 0; z < CHUNK_SIZE; ++z) {
+            int top = height - 1;
+            while (top >= 0 && padAt(x + 1, top, z + 1) == 0) --top;
+            for (int y = 0; y <= top; ++y) {
+                const int id = padAt(x + 1, y, z + 1);
+                if (!id) continue;
                 const int wx = originX + x;
                 const int wz = originZ + z;
-                const int id = infiniteWorld.getBlock(wx, y, wz);
-                if (!id) continue;
                 for (int face = 0; face < 6; ++face) {
                     const int nx = wx + neighbor[face][0];
                     const int ny = y + neighbor[face][1];
@@ -858,6 +901,7 @@ void rebuildStreamedChunk(mc::world::ChunkPos position) {
             }
         }
     }
+    meshPadData = nullptr;
     glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
         vertices.empty() ? nullptr : vertices.data(), GL_DYNAMIC_DRAW);
@@ -867,8 +911,9 @@ void rebuildStreamedChunk(mc::world::ChunkPos position) {
 }
 
 void rebuildDirtyChunks() {
-    infiniteWorld.updateStreaming(static_cast<int>(std::floor(player.x)),
-        static_cast<int>(std::floor(player.z)), renderDistanceChunks);
+    const int playerX = static_cast<int>(std::floor(player.x));
+    const int playerZ = static_cast<int>(std::floor(player.z));
+    infiniteWorld.updateStreaming(playerX, playerZ, renderDistanceChunks + 2, 3);
     for (auto it = streamedMeshes.begin(); it != streamedMeshes.end();) {
         if (!infiniteWorld.isLoaded(it->first)) {
             glDeleteVertexArrays(1, &it->second.vao);
@@ -878,8 +923,27 @@ void rebuildDirtyChunks() {
             ++it;
         }
     }
-    for (const auto& position : infiniteWorld.loadedChunkPositions())
-        rebuildStreamedChunk(position);
+    const mc::world::ChunkPos center = mc::world::InfiniteWorld::chunkOf(playerX, playerZ);
+    const float reach = static_cast<float>(renderDistanceChunks) + 0.5f;
+    const int span = renderDistanceChunks + 1;
+    std::vector<std::pair<int, mc::world::ChunkPos>> candidates;
+    for (int dz = -span; dz <= span; ++dz) {
+        for (int dx = -span; dx <= span; ++dx) {
+            const int distance = dx * dx + dz * dz;
+            if (static_cast<float>(distance) > reach * reach) continue;
+            const mc::world::ChunkPos position{center.x + dx, center.z + dz};
+            if (!infiniteWorld.isLoaded(position)) continue;
+            const auto mesh = streamedMeshes.find(position);
+            const bool needs = mesh == streamedMeshes.end() || mesh->second.dirty || infiniteWorld.meshDirty(position);
+            if (needs && infiniteWorld.hasLoadedNeighbors(position)) candidates.emplace_back(distance, position);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    const auto start = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        rebuildStreamedChunk(candidates[i].second);
+        if (i >= 1 && std::chrono::steady_clock::now() - start > std::chrono::milliseconds(5)) break;
+    }
 }
 
 void setupGeometry() {
@@ -944,7 +1008,7 @@ void loadSettings() {
     file >> fieldOfView >> mouseSensitivity >> renderDistanceChunks >> showDebugInfo >> viewBobbing;
     fieldOfView = std::clamp(fieldOfView, 60.0f, 100.0f);
     mouseSensitivity = std::clamp(mouseSensitivity, 0.035f, 0.30f);
-    renderDistanceChunks = std::clamp(renderDistanceChunks, 4, 16);
+    renderDistanceChunks = std::clamp(renderDistanceChunks, 2, 32);
 }
 
 void saveSettings() {
@@ -960,7 +1024,7 @@ void saveWorld() {
         uint32_t height;
         uint32_t depth;
     };
-    Header header{{'M','C','3','D','I','N','F','1'}, WORLD_X, WORLD_Y, WORLD_Z};
+    Header header{{'M','C','3','D','I','N','F','2'}, WORLD_X, WORLD_Y, WORLD_Z};
     float playerData[5] = {player.x, player.y, player.z, yaw, pitch};
     std::error_code directoryError;
     std::filesystem::path savePath(currentWorldPath);
@@ -1009,7 +1073,8 @@ bool loadWorld() {
     bool oldFormat = std::memcmp(header.magic, "MC3D271", 7) == 0;
     bool currentFormat = std::memcmp(header.magic, "MC3D272", 7) == 0;
     bool survivalFormat = std::memcmp(header.magic, "MC3D273", 7) == 0;
-    bool infiniteFormat = std::memcmp(header.magic, "MC3DINF1", 8) == 0;
+    const bool wideInventory = std::memcmp(header.magic, "MC3DINF2", 8) == 0;
+    bool infiniteFormat = wideInventory || std::memcmp(header.magic, "MC3DINF1", 8) == 0;
     if (!file || (!oldFormat && !currentFormat && !survivalFormat && !infiniteFormat) ||
         header.width == 0 || header.height == 0 || header.depth == 0 ||
         header.width > 512 || header.height > 256 || header.depth > 512)
@@ -1032,13 +1097,21 @@ bool loadWorld() {
     float loadedStats[2] = {mc::PlayerStats::MaxHealth, mc::PlayerStats::MaxHunger};
     std::vector<mc::ItemDrop> loadedDrops;
     if (currentFormat || survivalFormat || infiniteFormat) {
-        file.read(reinterpret_cast<char*>(loadedInventory.data()),
-                  static_cast<std::streamsize>(sizeof(mc::ItemStack) * mc::InventorySize));
+        const std::size_t slotsInFile = wideInventory ? mc::InventorySize : 32;
+        std::vector<mc::ItemStack> fileInventory(slotsInFile);
+        std::vector<int> fileDurability(slotsInFile);
+        file.read(reinterpret_cast<char*>(fileInventory.data()),
+                  static_cast<std::streamsize>(sizeof(mc::ItemStack) * slotsInFile));
         if (survivalFormat || infiniteFormat) {
-            file.read(reinterpret_cast<char*>(loadedDurability.data()),
-                      static_cast<std::streamsize>(sizeof(int) * mc::InventorySize));
+            file.read(reinterpret_cast<char*>(fileDurability.data()),
+                      static_cast<std::streamsize>(sizeof(int) * slotsInFile));
             file.read(reinterpret_cast<char*>(loadedStats), sizeof(loadedStats));
             if (!file || !std::isfinite(loadedStats[0]) || !std::isfinite(loadedStats[1])) return false;
+        }
+        for (std::size_t i = 0; i < slotsInFile; ++i) {
+            const std::size_t target = (wideInventory || i < 8) ? i : i + 1;
+            loadedInventory[target] = fileInventory[i];
+            loadedDurability[target] = fileDurability[i];
         }
         uint32_t dropCount = 0;
         file.read(reinterpret_cast<char*>(&dropCount), sizeof(dropCount));
@@ -1108,7 +1181,7 @@ bool loadWorld() {
     }
     itemDrops = std::move(loadedDrops);
     infiniteWorld.updateStreaming(static_cast<int>(std::floor(player.x)),
-        static_cast<int>(std::floor(player.z)), renderDistanceChunks);
+        static_cast<int>(std::floor(player.z)), std::min(renderDistanceChunks, 4) + 2);
     return true;
 }
 
@@ -1186,6 +1259,7 @@ void processInput(GLFWwindow* window, float dt) {
     bool escapeDown = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
     if (escapeDown && !pauseWasDown) {
         if (inventoryOpen) {
+            closeInventoryScreen();
             inventoryOpen = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         } else if (uiScreen == UiScreen::MainMenu) {
@@ -1217,6 +1291,7 @@ void processInput(GLFWwindow* window, float dt) {
     bool craftDown = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
     bool recipeBookDown = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
     if (inventoryDown && !inventoryWasDown) {
+        if (inventoryOpen) closeInventoryScreen();
         inventoryOpen = !inventoryOpen;
         glfwSetInputMode(window, GLFW_CURSOR, inventoryOpen ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
         firstMouse = true;
@@ -1378,9 +1453,9 @@ void processUiMouse(GLFWwindow* window) {
         else if (inside(left + 370, centerY + 65, 42, 34))
             mouseSensitivity = std::clamp(mouseSensitivity + 0.01f, 0.035f, 0.30f);
         else if (inside(left + 274, centerY + 3, 42, 34))
-            renderDistanceChunks = std::clamp(renderDistanceChunks - 1, 4, 16);
+            renderDistanceChunks = std::clamp(renderDistanceChunks - 1, 2, 32);
         else if (inside(left + 370, centerY + 3, 42, 34))
-            renderDistanceChunks = std::clamp(renderDistanceChunks + 1, 4, 16);
+            renderDistanceChunks = std::clamp(renderDistanceChunks + 1, 2, 32);
         else if (inside(left + 274, centerY - 59, 138, 34))
             showDebugInfo = !showDebugInfo;
         else if (inside(left + 274, centerY - 121, 138, 34))
@@ -1391,37 +1466,294 @@ void processUiMouse(GLFWwindow* window) {
     uiClickWasDown = down;
 }
 
-void processInventoryMouse(GLFWwindow* window) {
-    bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-    if (!inventoryOpen) {
-        inventoryClickWasDown = down;
-        return;
+struct InvGui {
+    int s;
+    int left;
+    int bottom;
+};
+
+InvGui invGui() {
+    InvGui g;
+    g.s = std::max(1, std::min(screenWidth / 320, screenHeight / 240));
+    g.left = (screenWidth - 176 * g.s) / 2;
+    g.bottom = (screenHeight - 166 * g.s) / 2;
+    return g;
+}
+
+struct GuiRect {
+    int x, y, w, h;
+};
+
+GuiRect guiRect(const InvGui& g, int x, int y, int w, int h) {
+    return {g.left + x * g.s, g.bottom + (166 - y - h) * g.s, w * g.s, h * g.s};
+}
+
+enum class SlotKind { Inventory, Grid, Output, Armor };
+
+struct GuiSlot {
+    SlotKind kind;
+    int index;
+    int x, y, w, h;
+};
+
+const std::vector<GuiSlot>& guiSlots() {
+    static const std::vector<GuiSlot> slots = [] {
+        std::vector<GuiSlot> list;
+        for (int i = 0; i < 4; ++i) list.push_back({SlotKind::Armor, i, 8, 8 + i * 18, 18, 18});
+        for (int i = 0; i < 4; ++i) list.push_back({SlotKind::Grid, i, 98 + (i % 2) * 18, 18 + (i / 2) * 18, 18, 18});
+        list.push_back({SlotKind::Output, 0, 151, 25, 24, 24});
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 9; ++c)
+                list.push_back({SlotKind::Inventory, 9 + r * 9 + c, 8 + c * 18, 84 + r * 18, 18, 18});
+        for (int c = 0; c < 9; ++c) list.push_back({SlotKind::Inventory, c, 8 + c * 18, 142, 18, 18});
+        return list;
+    }();
+    return slots;
+}
+
+struct HeldStack {
+    mc::ItemStack stack;
+    int durability = 0;
+};
+
+HeldStack cursorStack;
+std::array<mc::ItemStack, 4> craftGrid{};
+std::array<int, 4> craftGridDurability{};
+bool inventoryRightWasDown = false;
+
+HeldStack readSlot(const GuiSlot& slot) {
+    if (slot.kind == SlotKind::Inventory)
+        return {inventory.slot(static_cast<std::size_t>(slot.index)),
+                inventory.durability(static_cast<std::size_t>(slot.index))};
+    if (slot.kind == SlotKind::Grid)
+        return {craftGrid[static_cast<std::size_t>(slot.index)],
+                craftGridDurability[static_cast<std::size_t>(slot.index)]};
+    return {};
+}
+
+void writeSlot(const GuiSlot& slot, const HeldStack& value) {
+    if (slot.kind == SlotKind::Inventory) {
+        inventory.setSlot(static_cast<std::size_t>(slot.index), value.stack, value.durability);
+    } else if (slot.kind == SlotKind::Grid) {
+        const bool empty = value.stack.itemId <= 0 || value.stack.count <= 0;
+        craftGrid[static_cast<std::size_t>(slot.index)] = empty ? mc::ItemStack{} : value.stack;
+        craftGridDurability[static_cast<std::size_t>(slot.index)] = empty ? 0 : value.durability;
     }
-    if (down && !inventoryClickWasDown) {
-        const int box = 42;
-        const int gap = 5;
-        const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
-        const int start = (screenWidth - total) / 2;
-        int x = static_cast<int>(mouseX);
-        int y = screenHeight - static_cast<int>(mouseY);
-        int column = (x - start) / (box + gap);
-        if (column >= 0 && column < HOTBAR_SIZE) {
-            int slotX = start + column * (box + gap);
-            if (x >= slotX && x < slotX + box && y >= 18 && y < 18 + box) {
-                selectedBlock = column + 1;
-            } else {
-                for (int row = 0; row < 3; ++row) {
-                    int slotY = 18 + (3 - row) * (box + gap) + 12;
-                    if (x < slotX || x >= slotX + box || y < slotY || y >= slotY + box) continue;
-                    std::size_t backpackIndex = static_cast<std::size_t>(8 + row * 8 + column);
-                    std::size_t hotbarIndex = static_cast<std::size_t>(selectedBlock - 1);
-                    inventory.swapSlots(backpackIndex, hotbarIndex);
-                    break;
-                }
+}
+
+bool stackEmpty(const HeldStack& h) {
+    return h.stack.itemId <= 0 || h.stack.count <= 0;
+}
+
+bool stackable(int itemId) {
+    return !mc::Items::isTool(itemId);
+}
+
+int gridRecipe() {
+    return mc::Crafting::matchGrid(craftGrid.data(), craftGrid.size());
+}
+
+void consumeGridRecipe(int recipeIndex) {
+    const mc::Recipe& recipe = mc::Crafting::recipe(static_cast<std::size_t>(recipeIndex));
+    for (std::size_t i = 0; i < recipe.ingredientCount; ++i) {
+        int need = recipe.ingredients[i].count;
+        for (std::size_t slot = 0; slot < craftGrid.size() && need > 0; ++slot) {
+            if (craftGrid[slot].itemId != recipe.ingredients[i].itemId) continue;
+            const int taken = std::min(need, craftGrid[slot].count);
+            craftGrid[slot].count -= taken;
+            need -= taken;
+            if (craftGrid[slot].count == 0) {
+                craftGrid[slot] = {};
+                craftGridDurability[slot] = 0;
             }
         }
     }
-    inventoryClickWasDown = down;
+}
+
+void dropStack(int itemId, int count) {
+    if (itemId <= 0 || count <= 0) return;
+    mc::ItemDrop drop;
+    drop.itemId = itemId;
+    drop.count = count;
+    drop.x = player.x;
+    drop.y = player.y;
+    drop.z = player.z;
+    drop.vy = 1.5f;
+    itemDrops.push_back(drop);
+}
+
+void giveStack(const HeldStack& value) {
+    if (stackEmpty(value)) return;
+    if (mc::Items::isTool(value.stack.itemId)) {
+        for (std::size_t i = 0; i < mc::InventorySize; ++i) {
+            if (inventory.slot(i).itemId != 0) continue;
+            inventory.setSlot(i, value.stack, value.durability);
+            return;
+        }
+        dropStack(value.stack.itemId, 1);
+        return;
+    }
+    const int left = inventory.addItem(value.stack.itemId, value.stack.count);
+    dropStack(value.stack.itemId, left);
+}
+
+void closeInventoryScreen() {
+    giveStack(cursorStack);
+    cursorStack = {};
+    for (std::size_t i = 0; i < craftGrid.size(); ++i) {
+        giveStack({craftGrid[i], craftGridDurability[i]});
+        craftGrid[i] = {};
+        craftGridDurability[i] = 0;
+    }
+}
+
+void shiftMoveSlot(const GuiSlot& slot) {
+    HeldStack source = readSlot(slot);
+    if (stackEmpty(source)) return;
+    int first = 0, last = 0;
+    if (slot.kind == SlotKind::Inventory) {
+        first = slot.index < 9 ? 9 : 0;
+        last = slot.index < 9 ? 36 : 9;
+    } else {
+        first = 9;
+        last = 36;
+    }
+    auto place = [&](int from, int to) {
+        for (int pass = 0; pass < 2 && source.stack.count > 0; ++pass) {
+            for (int i = from; i < to && source.stack.count > 0; ++i) {
+                HeldStack target = readSlot({SlotKind::Inventory, i, 0, 0, 0, 0});
+                if (pass == 0) {
+                    if (stackEmpty(target) || target.stack.itemId != source.stack.itemId ||
+                        !stackable(source.stack.itemId) || target.stack.count >= mc::StackLimit) continue;
+                    const int moved = std::min(mc::StackLimit - target.stack.count, source.stack.count);
+                    target.stack.count += moved;
+                    source.stack.count -= moved;
+                    writeSlot({SlotKind::Inventory, i, 0, 0, 0, 0}, target);
+                } else if (stackEmpty(target)) {
+                    writeSlot({SlotKind::Inventory, i, 0, 0, 0, 0}, source);
+                    source = {};
+                }
+            }
+        }
+    };
+    place(first, last);
+    if (slot.kind != SlotKind::Inventory && source.stack.count > 0) place(0, 9);
+    writeSlot(slot, source);
+}
+
+void clickOutputSlot(bool shift) {
+    int recipeIndex = gridRecipe();
+    if (recipeIndex < 0) return;
+    if (shift) {
+        for (int guard = 0; guard < 64 && (recipeIndex = gridRecipe()) >= 0; ++guard) {
+            const mc::Recipe& recipe = mc::Crafting::recipe(static_cast<std::size_t>(recipeIndex));
+            consumeGridRecipe(recipeIndex);
+            const int outputId = recipe.outputId;
+            giveStack({{outputId, recipe.outputCount}, mc::Items::maxDurability(outputId)});
+        }
+        return;
+    }
+    const mc::Recipe& recipe = mc::Crafting::recipe(static_cast<std::size_t>(recipeIndex));
+    if (stackEmpty(cursorStack)) {
+        cursorStack = {{recipe.outputId, recipe.outputCount}, mc::Items::maxDurability(recipe.outputId)};
+        consumeGridRecipe(recipeIndex);
+    } else if (cursorStack.stack.itemId == recipe.outputId && stackable(recipe.outputId) &&
+               cursorStack.stack.count + recipe.outputCount <= mc::StackLimit) {
+        cursorStack.stack.count += recipe.outputCount;
+        consumeGridRecipe(recipeIndex);
+    }
+}
+
+void clickSlot(const GuiSlot& slot, bool rightButton, bool shift) {
+    if (slot.kind == SlotKind::Armor) return;
+    if (slot.kind == SlotKind::Output) {
+        clickOutputSlot(shift);
+        return;
+    }
+    if (shift && !rightButton) {
+        shiftMoveSlot(slot);
+        return;
+    }
+    HeldStack target = readSlot(slot);
+    if (!rightButton) {
+        if (stackEmpty(cursorStack)) {
+            cursorStack = target;
+            target = {};
+        } else if (stackEmpty(target)) {
+            target = cursorStack;
+            cursorStack = {};
+        } else if (target.stack.itemId == cursorStack.stack.itemId && stackable(target.stack.itemId)) {
+            const int moved = std::min(mc::StackLimit - target.stack.count, cursorStack.stack.count);
+            target.stack.count += moved;
+            cursorStack.stack.count -= moved;
+            if (cursorStack.stack.count <= 0) cursorStack = {};
+        } else {
+            std::swap(target, cursorStack);
+        }
+    } else {
+        if (stackEmpty(cursorStack)) {
+            if (!stackEmpty(target)) {
+                const int half = stackable(target.stack.itemId) ? (target.stack.count + 1) / 2 : target.stack.count;
+                cursorStack = {{target.stack.itemId, half}, target.durability};
+                target.stack.count -= half;
+                if (target.stack.count <= 0) target = {};
+            }
+        } else if (stackEmpty(target)) {
+            target = {{cursorStack.stack.itemId, 1}, cursorStack.durability};
+            if (--cursorStack.stack.count <= 0) cursorStack = {};
+        } else if (target.stack.itemId == cursorStack.stack.itemId && stackable(target.stack.itemId)) {
+            if (target.stack.count < mc::StackLimit) {
+                ++target.stack.count;
+                if (--cursorStack.stack.count <= 0) cursorStack = {};
+            }
+        } else {
+            std::swap(target, cursorStack);
+        }
+    }
+    writeSlot(slot, target);
+}
+
+const GuiSlot* slotAt(double px, double py) {
+    const InvGui g = invGui();
+    const int x = static_cast<int>(px);
+    const int y = screenHeight - static_cast<int>(py);
+    for (const GuiSlot& slot : guiSlots()) {
+        const GuiRect r = guiRect(g, slot.x, slot.y, slot.w, slot.h);
+        if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return &slot;
+    }
+    return nullptr;
+}
+
+void processInventoryMouse(GLFWwindow* window) {
+    const bool left = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    const bool right = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    if (!inventoryOpen) {
+        inventoryClickWasDown = left;
+        inventoryRightWasDown = right;
+        return;
+    }
+    const bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                       glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+    const bool leftPressed = left && !inventoryClickWasDown;
+    const bool rightPressed = right && !inventoryRightWasDown;
+    if (leftPressed || rightPressed) {
+        const GuiSlot* slot = slotAt(mouseX, mouseY);
+        if (slot) {
+            clickSlot(*slot, rightPressed, shift);
+        } else if (!stackEmpty(cursorStack)) {
+            const InvGui g = invGui();
+            const int x = static_cast<int>(mouseX);
+            const int y = screenHeight - static_cast<int>(mouseY);
+            if (x < g.left || x >= g.left + 176 * g.s || y < g.bottom || y >= g.bottom + 166 * g.s) {
+                const int amount = leftPressed ? cursorStack.stack.count : 1;
+                dropStack(cursorStack.stack.itemId, amount);
+                cursorStack.stack.count -= amount;
+                if (cursorStack.stack.count <= 0) cursorStack = {};
+            }
+        }
+    }
+    inventoryClickWasDown = left;
+    inventoryRightWasDown = right;
 }
 
 void processBlocks(GLFWwindow* window, float dt) {
@@ -1779,8 +2111,8 @@ void setFrameUniforms(const glm::mat4& view, const glm::mat4& projection,
     glUniformMatrix4fv(locProjection, 1, GL_FALSE, glm::value_ptr(projection));
     glUniform3fv(locCamera, 1, glm::value_ptr(camera));
     glUniform3fv(locFog, 1, glm::value_ptr(fog));
-    const float fogEnd = static_cast<float>(renderDistanceChunks * CHUNK_SIZE) * 0.94f;
-    glUniform1f(locFogStart, fogEnd * 0.42f);
+    const float fogEnd = static_cast<float>(renderDistanceChunks * CHUNK_SIZE);
+    glUniform1f(locFogStart, fogEnd * 0.7f);
     glUniform1f(locFogEnd, fogEnd);
     glUniform1f(locDay, skyState.day);
     glUniform1f(locAlpha, 1.0f);
@@ -1796,12 +2128,15 @@ int renderWorld(const glm::mat4& view, const glm::mat4& projection,
     glBindTexture(GL_TEXTURE_2D, atlasTexture);
     auto planes = extractFrustum(projection * view);
     int visible = 0;
-    const auto positions = infiniteWorld.visibleChunks(
-        static_cast<int>(std::floor(camera.x)), static_cast<int>(std::floor(camera.z)), renderDistanceChunks);
-    for (const auto& position : positions) {
-        auto found = streamedMeshes.find(position);
-        if (found == streamedMeshes.end()) continue;
-        ChunkMesh& mesh = found->second;
+    const mc::world::ChunkPos center = mc::world::InfiniteWorld::chunkOf(
+        static_cast<int>(std::floor(camera.x)), static_cast<int>(std::floor(camera.z)));
+    const float reach = static_cast<float>(renderDistanceChunks) + 0.5f;
+    for (auto& entry : streamedMeshes) {
+        const mc::world::ChunkPos position = entry.first;
+        const float dx = static_cast<float>(position.x - center.x);
+        const float dz = static_cast<float>(position.z - center.z);
+        if (dx * dx + dz * dz > reach * reach) continue;
+        ChunkMesh& mesh = entry.second;
         if (!mesh.vertexCount || !chunkVisible(planes, position.x, position.z)) continue;
         glm::mat4 model = glm::translate(glm::mat4(1.0f),
             glm::vec3(position.x * CHUNK_SIZE, 0.0f, position.z * CHUNK_SIZE));
@@ -2163,7 +2498,7 @@ void drawUI() {
         drawButton(centerX - 130, centerY + 48, 260, 42, "SINGLEPLAYER", true);
         drawButton(centerX - 130, centerY - 4, 260, 42, "SETTINGS");
         drawButton(centerX - 130, centerY - 56, 260, 42, "QUIT GAME");
-        drawText("28.0 EXPANSION", centerX, centerY - 145, 1, {0.75f,0.75f,0.75f}, true);
+        drawText("28.1 EXPANSION", centerX, centerY - 145, 1, {0.75f,0.75f,0.75f}, true);
     }
 
     if (uiScreen == UiScreen::WorldSelect) {
@@ -2243,78 +2578,154 @@ void drawUI() {
         drawUiRect(centerX - 8, centerY, 17, 1, white);
     }
 
-    const int hotbarBox = 48;
-    const int hotbarGap = 4;
-    const int hotbarTotal = HOTBAR_SIZE * hotbarBox + (HOTBAR_SIZE - 1) * hotbarGap;
-    const int hotbarStart = (screenWidth - hotbarTotal) / 2;
-    const int hotbarY = 18;
-    drawUiRect(hotbarStart - 7, hotbarY - 7, hotbarTotal + 14, hotbarBox + 14, {0.0f,0.0f,0.0f});
-    drawUiRect(hotbarStart - 5, hotbarY - 5, hotbarTotal + 10, hotbarBox + 10, {0.30f,0.30f,0.30f});
+    const InvGui gui = invGui();
+    const int gs = gui.s;
+    const glm::vec3 slotDark(0.216f, 0.216f, 0.216f);
+    const glm::vec3 slotFill(0.545f, 0.545f, 0.545f);
+    const glm::vec3 labelColor(0.25f, 0.25f, 0.25f);
+    const glm::vec3 black(0.0f, 0.0f, 0.0f);
 
-    auto drawSlot = [&](int x, int y, int box, const mc::ItemStack& stack,
-                        bool selected, std::size_t slotIndex, int hotbarNumber) {
-        (void)hotbarNumber;
-        if (selected) drawUiRect(x - 3, y - 3, box + 6, box + 6, {1.0f,1.0f,1.0f});
-        drawUiRect(x, y, box, box, {1.0f,1.0f,1.0f});
-        drawUiRect(x, y + 2, box - 2, box - 2, {0.22f,0.22f,0.22f});
-        drawUiRect(x + 2, y + 2, box - 4, box - 4, {0.545f,0.545f,0.545f});
-        if (stack.itemId > 0 && stack.count > 0) {
-            int iconSize = 32;
-            drawUiItemIcon(x + (box - iconSize) / 2, y + (box - iconSize) / 2 + 1, stack.itemId);
-            if (stack.count > 1) {
-                drawUiNumber(stack.count, x + box - 3, y + 3, 1, {0.2f,0.2f,0.2f});
-                drawUiNumber(stack.count, x + box - 4, y + 4, 1, white);
-            }
-            int maximum = mc::Items::maxDurability(stack.itemId);
-            if (maximum > 0) {
-                float ratio = static_cast<float>(inventory.durability(slotIndex)) / maximum;
-                int barWidth = static_cast<int>((box - 10) * std::clamp(ratio, 0.0f, 1.0f));
-                drawUiRect(x + 5, y + 3, box - 10, 3, {0.025f,0.025f,0.03f});
-                glm::vec3 durabilityColor = ratio > 0.5f ? glm::vec3(0.25f,0.82f,0.34f) :
-                    (ratio > 0.2f ? glm::vec3(0.91f,0.68f,0.18f) : glm::vec3(0.90f,0.22f,0.18f));
-                drawUiRect(x + 5, y + 3, barWidth, 3, durabilityColor);
-            }
+    auto drawStackAt = [&](int x, int y, int size, const mc::ItemStack& stack, int durability) {
+        if (stack.itemId <= 0 || stack.count <= 0) return;
+        drawUiIcon(x, y, size, stack.itemId);
+        const int unit = std::max(1, size / 16);
+        if (stack.count > 1) {
+            const std::string digits = std::to_string(stack.count);
+            const int textScale = std::max(1, unit);
+            drawText(digits, x + size + unit - static_cast<int>(digits.size()) * 6 * textScale, y, textScale, white, false, true);
+        }
+        const int maximum = mc::Items::maxDurability(stack.itemId);
+        if (maximum > 0 && durability < maximum) {
+            const float ratio = std::clamp(static_cast<float>(durability) / static_cast<float>(maximum), 0.0f, 1.0f);
+            drawUiRect(x + 2 * unit, y + unit, 13 * unit, 2 * unit, black);
+            const glm::vec3 barColor = ratio > 0.5f ? glm::vec3(0.35f,0.9f,0.2f) :
+                (ratio > 0.2f ? glm::vec3(0.95f,0.75f,0.1f) : glm::vec3(0.9f,0.2f,0.1f));
+            drawUiRect(x + 2 * unit, y + 2 * unit, std::max(1, static_cast<int>(13.0f * ratio)) * unit, unit, barColor);
         }
     };
 
     if (inventoryOpen) {
-        const int box = 42;
-        const int gap = 5;
-        const int total = HOTBAR_SIZE * box + (HOTBAR_SIZE - 1) * gap;
-        const int start = (screenWidth - total) / 2;
-        drawUiRect(start - 15, 64, total + 30, 194, {0.0f,0.0f,0.0f});
-        drawUiRect(start - 14, 65, total + 28, 192, {0.33f,0.33f,0.33f});
-        drawUiRect(start - 14, 67, total + 26, 190, {1.0f,1.0f,1.0f});
-        drawUiRect(start - 12, 67, total + 24, 188, {0.776f,0.776f,0.776f});
-        for (int row = 0; row < 3; ++row) {
-            for (int column = 0; column < 8; ++column) {
-                int index = 8 + row * 8 + column;
-                int x = start + column * (box + gap);
-                int y = 18 + (3 - row) * (box + gap) + 12;
-                drawSlot(x, y, box, inventory.slot(static_cast<std::size_t>(index)),
-                         false, static_cast<std::size_t>(index), 0);
+        drawUiAlpha(0, 0, screenWidth, screenHeight, black, 0.7f);
+        auto R = [&](int x, int y, int w, int h, const glm::vec3& color) {
+            const GuiRect r = guiRect(gui, x, y, w, h);
+            drawUiRect(r.x, r.y, r.w, r.h, color);
+        };
+        R(1, 0, 174, 166, black);
+        R(0, 1, 176, 164, black);
+        R(1, 1, 174, 164, slotDark * 1.5f);
+        R(1, 1, 172, 162, white);
+        R(3, 3, 170, 160, {0.776f,0.776f,0.776f});
+
+        auto insetBox = [&](int x, int y, int w, int h) {
+            R(x, y, w, h, white);
+            R(x, y, w - 1, h - 1, slotDark);
+            R(x + 1, y + 1, w - 2, h - 2, slotFill);
+        };
+        for (const GuiSlot& slot : guiSlots()) insetBox(slot.x, slot.y, slot.w, slot.h);
+        insetBox(26, 8, 49, 70);
+
+        const glm::vec3 skin(0.78f, 0.58f, 0.45f), shirt(0.0f, 0.62f, 0.62f), pants(0.25f, 0.25f, 0.6f);
+        R(46, 38, 8, 8, skin);
+        R(46, 38, 8, 2, {0.25f,0.15f,0.08f});
+        R(46, 40, 1, 2, {0.25f,0.15f,0.08f});
+        R(53, 40, 1, 2, {0.25f,0.15f,0.08f});
+        R(47, 42, 2, 1, white);
+        R(51, 42, 2, 1, white);
+        R(48, 42, 1, 1, {0.25f,0.2f,0.6f});
+        R(51, 42, 1, 1, {0.25f,0.2f,0.6f});
+        R(48, 44, 4, 1, {0.55f,0.35f,0.28f});
+        R(46, 46, 8, 12, shirt);
+        R(42, 46, 4, 4, shirt);
+        R(42, 50, 4, 8, skin);
+        R(54, 46, 4, 4, shirt);
+        R(54, 50, 4, 8, skin);
+        R(46, 58, 4, 12, pants);
+        R(50, 58, 4, 12, pants);
+        R(46, 68, 4, 2, {0.45f,0.45f,0.45f});
+        R(50, 68, 4, 2, {0.45f,0.45f,0.45f});
+
+        R(134, 32, 13, 6, slotFill);
+        for (int k = 0; k < 8; ++k) {
+            const int h = std::max(1, 15 - 2 * k);
+            R(147 + k, 35 - h / 2, 1, h, slotFill);
+        }
+
+        auto label = [&](const std::string& text, int x, int y) {
+            drawText(text, gui.left + x * gs, gui.bottom + (166 - y - 7) * gs, gs, labelColor, false, false);
+        };
+        label("Crafting", 97, 8);
+
+        const int outputRecipe = gridRecipe();
+        const GuiSlot* hovered = slotAt(mouseX, mouseY);
+        for (const GuiSlot& slot : guiSlots()) {
+            const int ix = slot.kind == SlotKind::Output ? slot.x + 4 : slot.x + 1;
+            const int iy = slot.kind == SlotKind::Output ? slot.y + 4 : slot.y + 1;
+            const GuiRect r = guiRect(gui, ix, iy, 16, 16);
+            if (slot.kind == SlotKind::Output) {
+                if (outputRecipe >= 0) {
+                    const mc::Recipe& recipe = mc::Crafting::recipe(static_cast<std::size_t>(outputRecipe));
+                    drawStackAt(r.x, r.y, r.w, {recipe.outputId, recipe.outputCount}, mc::Items::maxDurability(recipe.outputId));
+                }
+            } else {
+                const HeldStack held = readSlot(slot);
+                drawStackAt(r.x, r.y, r.w, held.stack, held.durability);
+            }
+            if (hovered == &slot && slot.kind != SlotKind::Armor)
+                drawUiAlpha(r.x, r.y, r.w, r.h, white, 0.5f);
+        }
+
+        if (!stackEmpty(cursorStack)) {
+            drawStackAt(static_cast<int>(mouseX) - 8 * gs, screenHeight - static_cast<int>(mouseY) - 8 * gs,
+                        16 * gs, cursorStack.stack, cursorStack.durability);
+        } else if (hovered && hovered->kind != SlotKind::Armor) {
+            int tipId = 0;
+            if (hovered->kind == SlotKind::Output) {
+                if (outputRecipe >= 0) tipId = mc::Crafting::recipe(static_cast<std::size_t>(outputRecipe)).outputId;
+            } else {
+                tipId = readSlot(*hovered).stack.itemId;
+            }
+            if (tipId > 0) {
+                const std::string name = uiItemName(tipId);
+                const int tw = static_cast<int>(name.size()) * 6 * gs;
+                const int th = 8 * gs;
+                int tx = static_cast<int>(mouseX) + 12 * gs / 2 + 4;
+                int ty = screenHeight - static_cast<int>(mouseY) + 2 * gs;
+                tx = std::min(tx, screenWidth - tw - 8 * gs);
+                ty = std::min(ty, screenHeight - th - 8 * gs);
+                drawUiAlpha(tx - 3 * gs, ty - 3 * gs, tw + 6 * gs, th + 6 * gs, {0.31f,0.0f,1.0f}, 0.4f);
+                drawUiAlpha(tx - 2 * gs, ty - 2 * gs, tw + 4 * gs, th + 4 * gs, {0.06f,0.0f,0.06f}, 0.94f);
+                drawText(name, tx, ty, gs, white, false, true);
             }
         }
-        drawText("INVENTORY", start - 4, 236, 2, {0.25f,0.25f,0.25f}, false, false);
-    }
-
-    for (int i = 0; i < HOTBAR_SIZE; ++i) {
-        int x = hotbarStart + i * (hotbarBox + hotbarGap);
-        drawSlot(x, hotbarY, hotbarBox, inventory.slot(static_cast<std::size_t>(i)),
-                 i + 1 == selectedBlock, static_cast<std::size_t>(i), i + 1);
     }
 
     if (!inventoryOpen) {
+        const int barLeft = (screenWidth - 182 * gs) / 2;
+        auto H = [&](int x, int y, int w, int h, const glm::vec3& color) {
+            drawUiRect(barLeft + x * gs, y * gs, w * gs, h * gs, color);
+        };
+        H(0, 0, 182, 22, black);
+        H(1, 1, 180, 20, slotFill);
+        for (int i = 0; i <= 9; ++i) H(1 + i * 20, 1, 1, 20, slotDark);
+        H(1, 1, 180, 1, slotDark);
+        H(1, 20, 180, 1, slotDark);
+        const int selected = selectedBlock - 1;
+        H(selected * 20 - 1, -1, 24, 24, black);
+        H(selected * 20, 0, 22, 22, white);
+        H(selected * 20 + 2, 2, 18, 18, slotFill);
+        for (int i = 0; i < HOTBAR_SIZE; ++i) {
+            const mc::ItemStack& stack = inventory.slot(static_cast<std::size_t>(i));
+            drawStackAt(barLeft + (3 + i * 20) * gs, 3 * gs, 16 * gs, stack, inventory.durability(static_cast<std::size_t>(i)));
+        }
         const mc::ItemStack& selectedStack = inventory.slot(static_cast<std::size_t>(selectedBlock - 1));
+        const int iconY = 22 * gs + 3 * gs;
         if (selectedStack.itemId > 0)
-            drawText(uiItemName(selectedStack.itemId), centerX, hotbarY + hotbarBox + 29, 2, white, true);
-        const int iconY = hotbarY + hotbarBox + 13;
-        const int iconStart = centerX - 190;
+            drawText(uiItemName(selectedStack.itemId), screenWidth / 2, iconY + 12 * gs + 6 * gs, gs, white, true);
         for (int i = 0; i < 10; ++i) {
             float healthPart = std::clamp((playerStats.health() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
             float hungerPart = std::clamp((playerStats.hunger() - i * 2.0f) / 2.0f, 0.0f, 1.0f);
-            drawSurvivalIcon(iconStart + i * 18, iconY, healthPart, false);
-            drawSurvivalIcon(centerX + 10 + i * 18, iconY, hungerPart, true);
+            drawSurvivalIcon(barLeft + i * 8 * gs, iconY, healthPart, false);
+            drawSurvivalIcon(barLeft + 182 * gs - 12 - i * 8 * gs - 4, iconY, hungerPart, true);
         }
     }
 
@@ -2348,7 +2759,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 28.0", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "MiniCraft3D | 28.1", nullptr, nullptr);
     if (!window) {
         std::cerr << "OpenGL window creation failed\n";
         glfwTerminate();
@@ -2418,7 +2829,7 @@ int main() {
 
         glm::mat4 projection = glm::perspective(glm::radians(fieldOfView),
             static_cast<float>(screenWidth) / static_cast<float>(screenHeight), 0.1f,
-            static_cast<float>(renderDistanceChunks * CHUNK_SIZE));
+            static_cast<float>(renderDistanceChunks * CHUNK_SIZE) * 1.6f);
         glm::vec3 front = cameraFront();
         glm::vec3 cameraPosition = player;
         if (viewBobbing && uiScreen == UiScreen::Gameplay && playerMoving)
@@ -2443,7 +2854,7 @@ int main() {
             fps = frames / static_cast<float>(titleTimer);
             frames = 0;
             titleTimer = 0.0;
-            std::string title = "MiniCraft3D 28.0";
+            std::string title = "MiniCraft3D 28.1";
             if (showDebugInfo) {
                 title += " | " + std::to_string(static_cast<int>(fps)) + " FPS | Chunks " +
                     std::to_string(visibleChunks) + "/" + std::to_string(infiniteWorld.loadedCount()) +
